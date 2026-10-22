@@ -108,7 +108,10 @@ For "a chat you pick", paste the chat's link from the address bar or the share m
   ```
 
   If your site limits methods, allow `PUT …/api/config` and `POST …/api/send`, `…/api/awake` and
-  `…/api/accessibility`. AI Nudge still requires its own secret on top of your login.
+  `…/api/accessibility`. AI Nudge still requires its own secret on top of your login: either use the
+  link from the menu, or have the proxy add it (`proxy_set_header X-Token "<secret>";`, kept in a
+  file only root can read) so the plain address works once you've signed in. The secret is the
+  `token` in `~/Library/Application Support/ai-nudge/config.json`.
 
 ## Good to know
 
