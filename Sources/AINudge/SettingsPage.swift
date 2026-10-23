@@ -198,7 +198,8 @@ function nudgeCard(n) {
   where.value = n.target;
   const chatInput = el("input", { type: "text", value: n.chat, oninput: e => { n.chat = e.target.value; save(); } });
   const chat = el("label", {}, "", chatInput);
-  const showChat = () => { const t = target(); chat.hidden = !t?.chat; chat.firstChild.textContent = t?.chat || ""; chatInput.placeholder = t?.id === "custom" ? "https://…?q={message}" : "https://…"; };
+  const note = el("p", { class: "hint" });
+  const showChat = () => { const t = target(); note.hidden = !t?.note; note.textContent = t?.note || ""; chat.hidden = !t?.chat; chat.firstChild.textContent = t?.chat || ""; chatInput.placeholder = t?.id === "custom" ? "https://…?q={message}" : "https://…"; };
   showChat();
   const msg = el("textarea", { rows: 2, oninput: e => { n.message = e.target.value; save(); } });
   msg.value = n.message;
@@ -207,6 +208,7 @@ function nudgeCard(n) {
     el("div", { class: "row" }, sw, name, time, send, del),
     el("div", { class: "row" }, days),
     el("label", {}, "Send to", where),
+    note,
     chat,
     el("label", {}, "Message", msg),
     el("div", { class: "meta", "data-meta": "" }));
@@ -280,7 +282,7 @@ document.getElementById("public").onchange = e => { S.config.publicURL = e.targe
 
 (async () => {
   try { S = await api("GET", "/api/state"); render(); }
-  catch { document.querySelector("main").textContent = "Open the settings from AI Nudge's menu bar icon."; return; }
+  catch { document.querySelector("main").textContent = "This page needs AI Nudge's secret link: use Copy Link in its menu bar icon on the Mac."; return; }
   // Refresh the status bits (not the fields you might be typing in).
   setInterval(async () => {
     try { merge(await api("GET", "/api/state")); } catch {}

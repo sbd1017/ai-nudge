@@ -128,6 +128,9 @@ private struct NudgeEditor: View {
                 Picker("Send to", selection: field(\.target)) {
                     ForEach(Target.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
+                if let note = n.target.note {
+                    Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 if let prompt = n.target.chatPrompt {
                     TextField(prompt, text: field(\.chat))
                 }

@@ -1,11 +1,12 @@
 # AI Nudge
 
-A tiny macOS menu bar app that sends a message to **Claude** or **ChatGPT** at the times you choose,
+A tiny macOS menu bar app that sends a message to **Claude** or **Codex** at the times you choose,
 so your plan's usage window starts before you sit down. Send "hi" at 06:00 and a 5-hour window
 resets at 11:00, not five hours after you first type.
 
-It sends the message the way you would: it opens the chat, puts in your text and presses Return.
-That is what makes it count against your subscription's limits; API calls don't. It also has a
+For Claude it sends the message the way you would: it opens the chat, puts in your text and
+presses Return. For Codex it sends a request through the `codex` tool that comes with the ChatGPT
+app. Both count against your subscription's limits; API calls don't. It also has a
 Caffeine-style **Keep Awake**.
 
 About 500 KB, no dependencies, no account, nothing leaves your Mac except the messages you schedule.
@@ -22,7 +23,7 @@ About 500 KB, no dependencies, no account, nothing leaves your Mac except the me
 
 - **Nudges on a schedule:** a time, the days of the week, where it goes and what it says. Add as
   many as you like.
-- **Claude and ChatGPT, app or browser:**
+- **Claude (app or browser) and Codex:**
 
   | Send to | How it gets there |
   | --- | --- |
@@ -30,9 +31,16 @@ About 500 KB, no dependencies, no account, nothing leaves your Mac except the me
   | Claude app: incognito chat | opens a new chat, presses ⇧⌘I, pastes, presses Return |
   | Claude app: a chat you pick | opens `claude://claude.ai/chat/<id>`, pastes, presses Return |
   | claude.ai in a browser: new / incognito / a chat you pick | `claude.ai/new?q=…`, `/new?incognito` or `/chat/<id>` |
-  | ChatGPT app: new / temporary chat | ⌘N or ⇧⌘N, pastes, presses Return |
-  | chatgpt.com in a browser: new / temporary / a chat you pick | `chatgpt.com/?q=…`, `?temporary-chat=true&q=…` or `/c/<id>` |
   | Any link | opens it (`{message}` is replaced with your text), pastes unless the link carried it, presses Return |
+  | Claude Code (command line) | runs `claude -p` (Claude Code, which comes with the Claude app); no typing |
+  | Codex (command line) | runs `codex exec` (Codex, which comes with the ChatGPT app); no typing |
+
+  **Which window starts:** any Claude target starts your Claude usage window, which is shared with
+  Claude Code. The **Codex** target starts the Work + Codex allowance, which begins with your first
+  Work or Codex request. A ChatGPT chat message doesn't start it, so AI Nudge no longer sends
+  ChatGPT chats; nudges saved with the old ChatGPT targets switch to Codex. Each target's note in
+  Settings says which window it starts. The two command-line targets need no Accessibility permission and
+  work with the screen locked (the Mac still has to be awake).
 
 - **Settings on the Mac and on the web:** a native settings window from the menu bar, plus the same
   settings as a web page you can open from your phone at home, or from anywhere through your own
@@ -119,7 +127,7 @@ For "a chat you pick", paste the chat's link from the address bar or the share m
   can't do on a sleeping or locked Mac. Missed nudges go out when you wake or unlock it, within the
   catch-up window. Keep Awake helps; for a 06:00 nudge with the Mac closed, use
   [ai-nudge-cli](https://github.com/sbd1017/ai-nudge-cli).
-- **Apps change.** The deep links and shortcuts above match the Claude and ChatGPT apps as of
+- **Apps change.** The deep links and shortcuts above match the Claude app as of
   October 2026. If one stops working, the nudge's card says why, and a longer **Wait after opening
   a chat** often helps on slower Macs.
 - **Terms of use.** This automates the chat apps' own interfaces, at the pace of a person sending

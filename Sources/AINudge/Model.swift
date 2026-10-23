@@ -8,11 +8,8 @@ enum Target: String, Codable, CaseIterable {
     case claudeWeb = "claude-web"
     case claudeWebIncognito = "claude-web-incognito"
     case claudeWebChat = "claude-web-chat"
-    case chatgptApp = "chatgpt-app"
-    case chatgptAppTemp = "chatgpt-app-temp"
-    case chatgptWeb = "chatgpt-web"
-    case chatgptWebTemp = "chatgpt-web-temp"
-    case chatgptWebChat = "chatgpt-web-chat"
+    case claudeCode = "claude-code"
+    case codex
     case custom
 
     var label: String {
@@ -23,12 +20,33 @@ enum Target: String, Codable, CaseIterable {
         case .claudeWeb: return "claude.ai in browser: new chat"
         case .claudeWebIncognito: return "claude.ai in browser: incognito chat"
         case .claudeWebChat: return "claude.ai in browser: a chat you pick"
-        case .chatgptApp: return "ChatGPT app: new chat"
-        case .chatgptAppTemp: return "ChatGPT app: temporary chat"
-        case .chatgptWeb: return "chatgpt.com in browser: new chat"
-        case .chatgptWebTemp: return "chatgpt.com in browser: temporary chat"
-        case .chatgptWebChat: return "chatgpt.com in browser: a chat you pick"
+        case .claudeCode: return "Claude Code (command line)"
+        case .codex: return "Codex (command line)"
         case .custom: return "Any link (browser)"
+        }
+    }
+
+    /// Nudges saved with the ChatGPT chat targets (removed: a ChatGPT chat doesn't start the
+    /// Work + Codex allowance, a Codex request does) become Codex nudges.
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = Target(rawValue: raw) ?? (raw.hasPrefix("chatgpt") ? .codex : .claudeApp)
+    }
+
+    /// Sent by running Claude Code or Codex rather than by typing into an app.
+    var usesCLI: Bool { self == .claudeCode || self == .codex }
+
+    /// Which usage window a nudge here starts, shown under the picker.
+    var note: String? {
+        switch self {
+        case .claudeApp, .claudeAppIncognito, .claudeAppChat, .claudeWeb, .claudeWebIncognito, .claudeWebChat:
+            return "Starts your Claude usage window (shared with Claude Code)."
+        case .claudeCode:
+            return "Runs the claude tool: starts your Claude usage window. No typing, so it works with the screen locked."
+        case .codex:
+            return "Runs the codex tool: a Codex request, which starts your Work + Codex usage window. No typing, so it works with the screen locked."
+        case .custom:
+            return nil
         }
     }
 
@@ -36,7 +54,6 @@ enum Target: String, Codable, CaseIterable {
     var chatPrompt: String? {
         switch self {
         case .claudeAppChat, .claudeWebChat: return "Chat link, e.g. https://claude.ai/chat/…"
-        case .chatgptWebChat: return "Chat link, e.g. https://chatgpt.com/c/…"
         case .custom: return "Link to open; {message} is replaced with your message"
         default: return nil
         }

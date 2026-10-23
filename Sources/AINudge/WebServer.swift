@@ -79,7 +79,7 @@ final class WebServer {
         default: break
         }
         guard r.token == store.config.token else {
-            return ("403 Forbidden", "text/plain; charset=utf-8", Data("Open the settings from AI Nudge's menu bar icon.\n".utf8))
+            return ("403 Forbidden", "text/plain; charset=utf-8", Data("This page needs AI Nudge's secret link. On the Mac, open the menu bar icon and use Copy Link for Other Devices or Copy Link for Your Site (or Settings… there).\n".utf8))
         }
         switch (r.method, r.path) {
         case ("GET", "/"):
@@ -108,7 +108,7 @@ final class WebServer {
     }
 
     private struct Snapshot: Encodable {
-        struct Option: Encodable { let id: String, label: String, chat: String? }
+        struct Option: Encodable { let id: String, label: String, chat: String?, note: String? }
         let config: Config
         let targets: [Option]
         let browsers: [Option]
@@ -130,8 +130,8 @@ final class WebServer {
         let defaultName = Sender.knownBrowsers.first { $0.0 == defaultID }?.1 ?? "default"
         return Snapshot(
             config: config,
-            targets: Target.allCases.map { .init(id: $0.rawValue, label: $0.label, chat: $0.chatPrompt) },
-            browsers: Sender.installedBrowsers.map { .init(id: $0.id, label: $0.name, chat: nil) },
+            targets: Target.allCases.map { .init(id: $0.rawValue, label: $0.label, chat: $0.chatPrompt, note: $0.note) },
+            browsers: Sender.installedBrowsers.map { .init(id: $0.id, label: $0.name, chat: nil, note: nil) },
             defaultBrowser: defaultName,
             // Formatted here: browsers can report a different time zone (Firefox's fingerprinting protection uses UTC).
             status: Dictionary(uniqueKeysWithValues: store.config.nudges.map { n in

@@ -5,17 +5,6 @@ import ApplicationServices
 @MainActor
 enum Sender {
     static let claudeApp = "com.anthropic.claudefordesktop"
-    static let chatgptNew = "com.openai.codex"      // "ChatGPT", the current app (chat and Codex)
-    static let chatgptClassic = "com.openai.chat"   // "ChatGPT Classic"
-
-    /// The ChatGPT app to use: whichever is running, else the current one if it's installed.
-    static var chatgptApp: String {
-        for id in [chatgptNew, chatgptClassic] where !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty {
-            return id
-        }
-        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: chatgptNew) != nil ? chatgptNew : chatgptClassic
-    }
-
     enum Failure: LocalizedError {
         case noAccessibility, locked, missingChat, badLink(String), appMissing(String), wrongApp(String?), interrupted, unsupported(String)
 
@@ -98,17 +87,8 @@ enum Sender {
             return Plan(url: URL(string: "https://claude.ai/new?incognito"), app: browser, prefilled: false)
         case .claudeWebChat:
             return Plan(url: URL(string: "https://claude.ai/chat/\(try chat())"), app: browser, prefilled: false)
-        case .chatgptApp:
-            return Plan(url: nil, app: chatgptApp, prefilled: false, shortcut: (45, .maskCommand))   // ⌘N
-        case .chatgptAppTemp:
-            guard chatgptApp == chatgptNew else { throw Failure.unsupported("temporary chats need the current ChatGPT app, not ChatGPT Classic") }
-            return Plan(url: nil, app: chatgptNew, prefilled: false, shortcut: (45, [.maskCommand, .maskShift]))   // ⇧⌘N
-        case .chatgptWeb:
-            return Plan(url: URL(string: "https://chatgpt.com/?q=\(q)"), app: browser, prefilled: true)
-        case .chatgptWebTemp:
-            return Plan(url: URL(string: "https://chatgpt.com/?temporary-chat=true&q=\(q)"), app: browser, prefilled: true)
-        case .chatgptWebChat:
-            return Plan(url: URL(string: "https://chatgpt.com/c/\(try chat())"), app: browser, prefilled: false)
+        case .claudeCode, .codex:
+            throw Failure.unsupported("sent through the command-line tool, not typed")
         case .custom:
             let link = n.chat.trimmingCharacters(in: .whitespaces)
             guard !link.isEmpty else { throw Failure.missingChat }
@@ -135,7 +115,10 @@ enum Sender {
         return !ownKeys.contains { abs($0.timeIntervalSince(last)) < 0.5 }
     }
 
-    static func send(_ n: Nudge, config: Config) async throws {
+    /// Returns the reply when the target gives one (the command-line tools do).
+    @discardableResult
+    static func send(_ n: Nudge, config: Config) async throws -> String? {
+        if n.target.usesCLI { return try await CLITools.send(n) }
         let start = Date()
         ownKeys = []
         guard trusted else { throw Failure.noAccessibility }
@@ -184,6 +167,7 @@ enum Sender {
         if config.restoreFocus, let previous, previous.bundleIdentifier != plan.app {
             previous.activate(options: [])
         }
+        return nil
     }
 
     private static func pause(_ seconds: Double) async throws {

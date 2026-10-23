@@ -22,8 +22,8 @@ final class Store: ObservableObject {
     private let awake = KeepAwake()
 
     /// AI_NUDGE_DATA=<folder> keeps settings, state and log there instead (for trying things out).
-    private static let dataOverride = ProcessInfo.processInfo.environment["AI_NUDGE_DATA"].map { URL(fileURLWithPath: $0) }
-    static let dir = dataOverride ?? FileManager.default.homeDirectoryForCurrentUser
+    nonisolated private static let dataOverride = ProcessInfo.processInfo.environment["AI_NUDGE_DATA"].map { URL(fileURLWithPath: $0) }
+    nonisolated static let dir = dataOverride ?? FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/ai-nudge")
     private let configURL = dir.appendingPathComponent("config.json")
     private let stateURL = dir.appendingPathComponent("state.json")
@@ -83,19 +83,22 @@ final class Store: ObservableObject {
         for n in config.nudges where n.enabled {
             guard let due = Schedule.lastOccurrence(time: n.time, days: n.days, before: now),
                   now.timeIntervalSince(due) <= window, handled(n.id) < due else { continue }
-            if Sender.screenLocked() {
-                if !lockedNoted { record("\(n.name): screen is locked; will send when it's unlocked") }
-                lockedNoted = true
-                return
+            // Typing needs an unlocked screen and nobody at the keyboard; the command-line targets don't.
+            if !n.target.usesCLI {
+                if Sender.screenLocked() {
+                    if !lockedNoted { record("\(n.name): screen is locked; will send when it's unlocked") }
+                    lockedNoted = true
+                    continue
+                }
+                lockedNoted = false
+                // Don't take over while you're using the Mac; try again once you've been idle a moment.
+                if Sender.secondsSinceInput() < 30 {
+                    if !busyNoted { record("\(n.name): due, waiting until you've stopped using the Mac for 30 s") }
+                    busyNoted = true
+                    continue    // the 20-second timer checks again
+                }
+                busyNoted = false
             }
-            lockedNoted = false
-            // Don't take over while you're using the Mac; try again once you've been idle a moment.
-            if Sender.secondsSinceInput() < 30 {
-                if !busyNoted { record("\(n.name): due, waiting until you've stopped using the Mac for 30 s") }
-                busyNoted = true
-                return      // the 20-second timer checks again
-            }
-            busyNoted = false
             state.sent[n.id] = now    // recorded first: a failed send isn't retried in a loop
             saveState()
             send(n)
@@ -114,8 +117,8 @@ final class Store: ObservableObject {
         Task {
             var failure: String?
             do {
-                try await Sender.send(n, config: config)
-                record("\(n.name): sent (\(n.target.label))")
+                let reply = try await Sender.send(n, config: config)
+                record("\(n.name): sent (\(n.target.label))" + (reply.map { ": \($0)" } ?? ""))
             } catch {
                 failure = error.localizedDescription
                 record("\(n.name): not sent: \(error.localizedDescription)")
