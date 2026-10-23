@@ -13,6 +13,7 @@ final class Store: ObservableObject {
     @Published private(set) var trusted = Sender.trusted
     @Published private(set) var now = Date()
     @Published private(set) var awakeUntil: KeepAwake.Until?
+    @Published private(set) var shake: CGFloat = 0     // the menu bar bubble jiggles while sending
 
     let firstRun: Bool
     var showSettingsWindow: (() -> Void)?
@@ -20,6 +21,7 @@ final class Store: ObservableObject {
     private var lockedNoted = false
     private var busyNoted = false
     private let awake = KeepAwake()
+    private var shakeTimer: Timer?
 
     /// AI_NUDGE_DATA=<folder> keeps settings, state and log there instead (for trying things out).
     nonisolated private static let dataOverride = ProcessInfo.processInfo.environment["AI_NUDGE_DATA"].map { URL(fileURLWithPath: $0) }
@@ -114,6 +116,7 @@ final class Store: ObservableObject {
 
     private func send(_ n: Nudge) {
         sending = n.name
+        startShaking()
         Task {
             var failure: String?
             do {
@@ -126,8 +129,27 @@ final class Store: ObservableObject {
             state.outcomes[n.id] = .init(date: Date(), error: failure)
             saveState()
             sending = nil
+            stopShaking()
             check()
         }
+    }
+
+    /// A nudge, like the old messenger kind: a quick jiggle, a pause, again, until the send is done.
+    private func startShaking() {
+        let frames = NudgeIcon.shakeFrames + Array(repeating: 0, count: 10)
+        var i = 0
+        shakeTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                Store.shared.shake = frames[i % frames.count]
+                i += 1
+            }
+        }
+    }
+
+    private func stopShaking() {
+        shakeTimer?.invalidate()
+        shakeTimer = nil
+        shake = 0
     }
 
     // MARK: Settings

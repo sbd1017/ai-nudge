@@ -10,6 +10,12 @@ app. Both count against your subscription's limits; API calls don't. It also has
 Caffeine-style **Keep Awake**.
 
 About 500 KB, no dependencies, no account, nothing leaves your Mac except the messages you schedule.
+It lives in the menu bar as a little robot-faced chat bubble: calm eyes while it waits, wide eyes
+while Keep Awake is on, and happy eyes and a jiggle while a nudge is sending.
+
+<p align="center">
+  <img src="docs/screenshots/menu-icon.png" width="600" alt="The menu bar icon: calm, Keep Awake and sending, on dark and light menu bars">
+</p>
 
 <p align="center">
   <img src="docs/screenshots/settings-window.png" width="460" alt="The AI Nudge settings window with three scheduled nudges">
@@ -86,24 +92,25 @@ grant it again after each build. `UNIVERSAL=1 ./build.sh` builds for Apple silic
 
 ## Use
 
-1. Click the timer in the menu bar and choose **Settings…**.
+1. Click the robot in the menu bar and choose **Settings…**.
 2. Edit the sample nudge or add your own: name, time, days, where to send it and the message.
    Changes save as you type.
 3. Choose **Send Now** to try it.
-4. Switch on **Open at Login** in the menu.
+4. Switch on **Open AI Nudge at login** in Settings › General.
 
-The menu also switches nudges on and off, has **Keep Awake**, and opens the web settings.
+The menu bar menu keeps to everyday things: what's next, the last result, an on/off switch for
+each nudge, **Keep Awake** and **Settings…**. Everything set once lives in Settings.
 
 For "a chat you pick", paste the chat's link from the address bar or the share menu.
 
 ### From your phone
 
 - **At home:** in Settings › General, switch on **Let other devices on my network open the web
-  settings**, then use **Copy Link for Other Devices**. The link includes a secret, so only people
+  settings**, then use the **Copy** button under it. The link includes a secret, so only people
   you give it to can open it.
 - **From anywhere:** put the page behind a login on a site you already run, with a reverse proxy.
-  Then enter that address under **Address on your own site**, and the menu's **Copy Link for Your
-  Site** gives you the link. The page uses relative addresses and no inline scripts, so a sub-path
+  Then enter that address under **Address on your own site**, and the **Copy** button there gives you
+  the link. The page uses relative addresses and no inline scripts, so a sub-path
   and a strict Content-Security-Policy both work. An nginx example:
 
   ```nginx
@@ -117,7 +124,7 @@ For "a chat you pick", paste the chat's link from the address bar or the share m
 
   If your site limits methods, allow `PUT …/api/config` and `POST …/api/send`, `…/api/awake` and
   `…/api/accessibility`. AI Nudge still requires its own secret on top of your login: either use the
-  link from the menu, or have the proxy add it (`proxy_set_header X-Token "<secret>";`, kept in a
+  link from Settings › General, or have the proxy add it (`proxy_set_header X-Token "<secret>";`, kept in a
   file only root can read) so the plain address works once you've signed in. The secret is the
   `token` in `~/Library/Application Support/ai-nudge/config.json`.
 

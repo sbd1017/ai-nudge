@@ -79,7 +79,7 @@ final class WebServer {
         default: break
         }
         guard r.token == store.config.token else {
-            return ("403 Forbidden", "text/plain; charset=utf-8", Data("This page needs AI Nudge's secret link. On the Mac, open the menu bar icon and use Copy Link for Other Devices or Copy Link for Your Site (or Settings… there).\n".utf8))
+            return ("403 Forbidden", "text/plain; charset=utf-8", Data("This page needs AI Nudge's secret link. On the Mac, copy the link from AI Nudge's Settings › General.\n".utf8))
         }
         switch (r.method, r.path) {
         case ("GET", "/"):

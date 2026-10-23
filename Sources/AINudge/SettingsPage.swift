@@ -282,7 +282,7 @@ document.getElementById("public").onchange = e => { S.config.publicURL = e.targe
 
 (async () => {
   try { S = await api("GET", "/api/state"); render(); }
-  catch { document.querySelector("main").textContent = "This page needs AI Nudge's secret link: use Copy Link in its menu bar icon on the Mac."; return; }
+  catch { document.querySelector("main").textContent = "This page needs AI Nudge's secret link: copy it from Settings › General on the Mac."; return; }
   // Refresh the status bits (not the fields you might be typing in).
   setInterval(async () => {
     try { merge(await api("GET", "/api/state")); } catch {}

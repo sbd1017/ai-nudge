@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 
 /// The settings window on the Mac. The web page has the same settings, for when you're away.
@@ -164,6 +165,7 @@ private struct DayStyle: ButtonStyle {
 
 private struct GeneralTab: View {
     @ObservedObject var store: Store
+    @State private var openAtLogin = SMAppService.mainApp.status == .enabled
 
     private func setting<T>(_ path: WritableKeyPath<Config, T>) -> Binding<T> {
         Binding(get: { store.config[keyPath: path] }, set: { v in store.edit { $0[keyPath: path] = v } })
@@ -181,6 +183,15 @@ private struct GeneralTab: View {
             Stepper(value: setting(\.catchUpMinutes), in: 0...1440, step: 15) {
                 Text("Send late if the Mac was asleep, up to \(store.config.catchUpMinutes) min")
             }
+            Toggle("Open AI Nudge at login", isOn: $openAtLogin)
+                .onChange(of: openAtLogin) { on in
+                    do {
+                        try on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+                    } catch {
+                        store.record("open at login: \(error.localizedDescription)")
+                        openAtLogin = SMAppService.mainApp.status == .enabled
+                    }
+                }
             Toggle("Go back to the app I was using", isOn: setting(\.restoreFocus))
             Section("Keep Awake (from the menu bar)") {
                 Toggle("Let the display sleep, just keep the Mac awake", isOn: setting(\.awakeLetDisplaySleep))
