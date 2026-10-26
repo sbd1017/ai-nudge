@@ -97,6 +97,8 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: 
 .warnbox strong { color: var(--warn); }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .row + .row, .row + label, label + label, .card > label, .card > .hint { margin-top: 10px; }
+.card > textarea { margin-top: 4px; }
+.card > * + .row { margin-top: 10px; }
 label { display: block; font-size: 12.5px; color: var(--muted); }
 label > input, label > select, label > textarea { margin-top: 4px; }
 input, select, textarea, button { font: inherit; color: inherit; }
@@ -199,14 +201,17 @@ function nudgeCard(n) {
   const repeat = el("select", { "aria-label": "Repeat", onchange: e => {
     n.repeats = e.target.value;
     if (n.repeats === "once" && !n.date) { n.date = S.today; dateIn.value = n.date; }
-    if (n.repeats === "reset") { n.target = "codex"; where.value = "codex"; showChat(); }
+    const claudeTarget = n.target.startsWith("claude");
+    if (n.repeats === "reset" && !["codex", "command"].includes(n.target)) { n.target = "codex"; n.chat = ""; where.value = "codex"; fillChats(); showChat(); }
+    if (n.repeats === "claude-reset" && !claudeTarget && n.target !== "command") { n.target = "claude-app"; n.chat = ""; where.value = "claude-app"; fillChats(); showChat(); }
     showMode(); save();
-  } }, el("option", { value: "weekly" }, "Weekly"), el("option", { value: "once" }, "Once"), el("option", { value: "reset" }, "When Codex resets"));
+  } }, el("option", { value: "weekly" }, "Weekly"), el("option", { value: "once" }, "Once"), el("option", { value: "reset" }, "When Codex resets"), el("option", { value: "claude-reset" }, "When Claude resets"));
   repeat.value = n.repeats || "weekly";
   const showMode = () => {
     const m = n.repeats || "weekly";
     days.hidden = m !== "weekly"; dateIn.hidden = m !== "once"; time.hidden = m === "reset";
-    codexNote.hidden = m !== "reset";
+    codexNote.hidden = m !== "reset" && m !== "claude-reset";
+    showMessage();
   };
   // Codex: a new unsaved session (just starts the window), the most recent chat, or a chat by name.
   const codexChat = el("select", { "aria-label": "Codex chat", onchange: e => { n.chat = e.target.value; showChat(); save(); } });
@@ -220,14 +225,24 @@ function nudgeCard(n) {
   const codexChatBox = el("label", {}, "Codex chat", codexChat);
   const codexChatHint = el("p", { class: "hint" }, "Continues that chat in its own folder, where it can change files, as it would in the app. It runs in the background; its reply shows in Activity.");
   const where = el("select", { onchange: e => { n.target = e.target.value; n.chat = ""; chatInput.value = ""; fillChats(); showChat(); save(); } },
-    ...S.targets.map(t => el("option", { value: t.id }, t.label)));
+    ...S.targets.filter(t => t.id !== "command" || n.target === "command").map(t => el("option", { value: t.id }, t.label)));
   where.value = n.target;
+  where.disabled = n.target === "command";
   const chatInput = el("input", { type: "text", value: n.chat, oninput: e => { n.chat = e.target.value; save(); } });
   const chat = el("label", {}, "", chatInput);
   const note = el("p", { class: "hint" });
   const showChat = () => { const t = target(); codexChatBox.hidden = n.target !== "codex"; codexChatHint.hidden = n.target !== "codex" || !n.chat; note.hidden = !t?.note; note.textContent = t?.note || ""; chat.hidden = !t?.chat; chat.firstChild.textContent = t?.chat || ""; chatInput.placeholder = t?.id === "custom" ? "https://…?q={message}" : "https://…"; };
   showChat();
   const msg = el("textarea", { rows: 2, oninput: e => { n.message = e.target.value; save(); } });
+  msg.readOnly = n.target === "command";
+  // The message box: "Message", "Resume message" (with a fuller prompt one click away) or a command.
+  const msgLabel = el("span", {}, "Message");
+  const usePrompt = el("button", { type: "button", class: "ghost", onclick: () => { n.message = S.resumePrompt; msg.value = n.message; showMessage(); save(); } }, "Use detailed resume prompt");
+  const showMessage = () => {
+    const resume = (n.repeats || "weekly").endsWith("reset");
+    msgLabel.textContent = n.target === "command" ? "Command (change it on the Mac)" : resume ? "Resume message" : "Message";
+    usePrompt.hidden = !resume || n.target === "command" || n.message === S.resumePrompt;
+  };
   msg.value = n.message;
 
   card.append(
@@ -240,7 +255,8 @@ function nudgeCard(n) {
     codexChatBox,
     codexChatHint,
     chat,
-    el("label", {}, "Message", msg),
+    el("div", { class: "row" }, el("label", { class: "grow" }, msgLabel), usePrompt),
+    msg,
     el("div", { class: "meta", "data-meta": "" }));
   fillChats();
   card.refillChats = fillChats;
@@ -291,7 +307,7 @@ function status() {
     const cc = card.querySelector('select[aria-label="Codex chat"]');
     if (cc && n && document.activeElement !== cc && +cc.dataset.count < (S.codexThreads || []).length + 2) card.refillChats?.();
     const cn = card.querySelector("[data-codex]");
-    if (cn && n) cn.textContent = n.target === "codex" ? S.codexStatus : "When Codex resets only works with the Codex target.";
+    if (cn && n) cn.textContent = (S.status[id] || {}).reset || "";
   }
   document.getElementById("log").textContent = S.log.join("\n") || "Nothing yet.";
   const lan = document.getElementById("lanlink");

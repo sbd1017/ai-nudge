@@ -10,6 +10,7 @@ enum Target: String, Codable, CaseIterable {
     case claudeWebChat = "claude-web-chat"
     case claudeCode = "claude-code"
     case codex
+    case command
     case custom
 
     var label: String {
@@ -22,6 +23,7 @@ enum Target: String, Codable, CaseIterable {
         case .claudeWebChat: return "claude.ai in browser: a chat you pick"
         case .claudeCode: return "Claude Code (command line)"
         case .codex: return "Codex (command line)"
+        case .command: return "Run a command (set on the Mac)"
         case .custom: return "Any link (browser)"
         }
     }
@@ -34,7 +36,12 @@ enum Target: String, Codable, CaseIterable {
     }
 
     /// Sent by running Claude Code or Codex rather than by typing into an app.
-    var usesCLI: Bool { self == .claudeCode || self == .codex }
+    var usesCLI: Bool { self == .claudeCode || self == .codex || self == .command }
+
+    /// Claude targets, for "When Claude resets".
+    var isClaude: Bool {
+        [.claudeApp, .claudeAppIncognito, .claudeAppChat, .claudeWeb, .claudeWebIncognito, .claudeWebChat, .claudeCode].contains(self)
+    }
 
     /// Which usage window a nudge here starts, shown under the picker.
     var note: String? {
@@ -45,6 +52,8 @@ enum Target: String, Codable, CaseIterable {
             return "Runs the claude tool: starts your Claude usage window. No typing, so it works with the screen locked."
         case .codex:
             return "Runs the codex tool: a Codex request, which starts your Work + Codex usage window. No typing, so it works with the screen locked. Pick a chat below to continue it; a new unsaved session only starts the window."
+        case .command:
+            return "Runs the command below with zsh in your home folder, in the background; its last line of output shows in Activity. For safety it can only be set or changed here on the Mac, not from the web page."
         case .custom:
             return nil
         }
@@ -73,19 +82,35 @@ struct Nudge: Codable, Identifiable, Equatable {
     var date: String?             // "yyyy-MM-dd", for a nudge sent once
 
     var mode: Repeat { repeats ?? .weekly }
+
+    /// A fuller message for resume nudges: carry on from where the work stopped.
+    static let resumePrompt = "Your usage limit has reset, so you can continue. Resume the unfinished task from where you stopped. Review the conversation, the repository state (git status / git diff), any pending plan or TODOs, and the work already done. Don't redo completed work. Keep going until the task is complete, run the relevant checks or tests, and say clearly in your final message whether everything is done."
 }
 
 /// How often a nudge goes out.
 enum Repeat: String, Codable, CaseIterable {
     case weekly                   // at `time` on `days`
     case once                     // at `time` on `date`, then it switches itself off
-    case reset                    // a minute after Codex's usage limit resets (Codex target only)
+    case reset                    // a minute after Codex's usage limit resets
+    case claudeReset = "claude-reset"   // a minute after Claude's usage limit resets
 
     var label: String {
         switch self {
         case .weekly: return "Weekly"
         case .once: return "Once"
-        case .reset: return "When Codex resets"
+        case .reset: return "Codex resets"
+        case .claudeReset: return "Claude resets"
+        }
+    }
+
+    var isReset: Bool { self == .reset || self == .claudeReset }
+
+    /// Whether a nudge with this target can use this mode.
+    func fits(_ t: Target) -> Bool {
+        switch self {
+        case .weekly, .once: return true
+        case .reset: return t == .codex || t == .command
+        case .claudeReset: return t.isClaude || t == .command
         }
     }
 }
@@ -134,6 +159,7 @@ struct RunState: Codable {
     var armed: [String: Date] = [:]
     var outcomes: [String: Outcome] = [:]   // the last try of each nudge, scheduled or not
     var codexResumeAt: Date?                 // when "When Codex resets" nudges go (reset + 1 min)
+    var claudeResumeAt: Date?                // likewise for "When Claude resets"
 
     struct Outcome: Codable {
         var date: Date
@@ -148,6 +174,7 @@ struct RunState: Codable {
         armed = try c.decodeIfPresent([String: Date].self, forKey: .armed) ?? [:]
         outcomes = try c.decodeIfPresent([String: Outcome].self, forKey: .outcomes) ?? [:]
         codexResumeAt = try c.decodeIfPresent(Date.self, forKey: .codexResumeAt)
+        claudeResumeAt = try c.decodeIfPresent(Date.self, forKey: .claudeResumeAt)
     }
 }
 

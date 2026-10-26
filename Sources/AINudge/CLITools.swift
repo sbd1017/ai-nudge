@@ -32,6 +32,8 @@ enum CLITools {
             if !chat.isEmpty { return try await continueCodexChat(chat, message: n.message, codex: p) }
             (exe, args) = (p, ["exec", "--skip-git-repo-check", "--sandbox", "read-only", "--ephemeral",
                                "--cd", workDir.path, "--output-last-message", replyFile.path, "--", n.message])
+        case .command:
+            return try startCommand(n)
         default:
             throw Failure.failed("not a command-line target")
         }
@@ -130,6 +132,89 @@ enum CLITools {
     /// The last non-empty line of a tool's output, for error messages.
     private static func lastLine(_ text: String) -> String {
         String(text.split(separator: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? "").prefix(200).description
+    }
+
+    // MARK: Commands
+
+    /// Runs a nudge's shell command (its message) with zsh in the home folder, in the background,
+    /// and logs how it ended.
+    private static func startCommand(_ n: Nudge) throws -> String {
+        let command = n.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty else { throw Failure.failed("no command set") }
+        let output = Store.dir.appendingPathComponent("command-\(n.id).log")
+        FileManager.default.createFile(atPath: output.path, contents: nil)
+        let handle = try? FileHandle(forWritingTo: output)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        p.arguments = ["-l", "-c", command]
+        p.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        var env = ProcessInfo.processInfo.environment
+        env["AI_NUDGE_NAME"] = n.name
+        p.environment = env
+        p.standardOutput = handle ?? FileHandle.nullDevice
+        p.standardError = handle ?? FileHandle.nullDevice
+        p.standardInput = FileHandle.nullDevice
+        let name = n.name
+        let killer = DispatchWorkItem { if p.isRunning { p.terminate() } }
+        p.terminationHandler = { proc in
+            killer.cancel()
+            try? handle?.close()
+            let last = lastLine((try? String(contentsOf: output, encoding: .utf8)) ?? "")
+            let line = "\(name): command \(proc.terminationStatus == 0 ? "finished" : "failed (exit \(proc.terminationStatus))")\(last.isEmpty ? "" : ": \(last)")"
+            DispatchQueue.main.async { MainActor.assumeIsolated { Store.shared.record(line) } }
+            proc.terminationHandler = nil
+        }
+        do { try p.run() } catch { throw Failure.failed("couldn't run the command: \(error.localizedDescription)") }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3600, execute: killer)
+        return "command started"
+    }
+
+    // MARK: Claude usage
+
+    /// When Claude's usage runs out again: nil while there's usage left, otherwise when the full
+    /// window (5-hour session or weekly) resets. From Claude Code's /usage, which reports usage and
+    /// sends no message.
+    static func claudeOutUntil() async -> Date?? {
+        guard let exe = findClaude() else { return nil }
+        let (status, out) = await run(exe, ["-p", "/usage", "--tools", "", "--strict-mcp-config", "--no-session-persistence"], timeout: 60)
+        guard status == 0, out.contains("Current session") else { return nil }
+        var resets: [Date] = []
+        for line in out.split(separator: "\n").map(String.init) where line.hasPrefix("Current ") {
+            guard let pct = firstMatch(#"(\d+)% used"#, in: line).flatMap({ Int($0[0]) }), pct >= 100 else { continue }
+            guard let at = parseReset(line) else { return nil }      // full, but no time we can read: ask again later
+            resets.append(at)
+        }
+        return .some(resets.max())
+    }
+
+    /// "… resets Oct 27 at 3am (Europe/London)" or "… resets 4:30pm" → that moment, local time.
+    static func parseReset(_ line: String, now: Date = Date(), calendar cal: Calendar = .current) -> Date? {
+        guard let m = firstMatch(#"resets (?:([A-Z][a-z]{2}) (\d{1,2}) at )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)"#, in: line),
+              var hour = Int(m[2]) else { return nil }
+        let minute = Int(m[3]) ?? 0
+        if m[4] == "pm", hour < 12 { hour += 12 }
+        if m[4] == "am", hour == 12 { hour = 0 }
+        var c = cal.dateComponents([.year, .month, .day], from: now)
+        c.hour = hour
+        c.minute = minute
+        if !m[0].isEmpty, let month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].firstIndex(of: m[0]),
+           let day = Int(m[1]) {
+            c.month = month + 1
+            c.day = day
+            guard var at = cal.date(from: c) else { return nil }
+            if at < now.addingTimeInterval(-2 * 86400) { at = cal.date(byAdding: .year, value: 1, to: at) ?? at }
+            return at
+        }
+        guard var at = cal.date(from: c) else { return nil }
+        if at < now { at = cal.date(byAdding: .day, value: 1, to: at) ?? at }
+        return at
+    }
+
+    /// The capture groups of the first match ("" for groups that didn't take part).
+    private static func firstMatch(_ pattern: String, in text: String) -> [String]? {
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
+        return (1..<m.numberOfRanges).map { i in Range(m.range(at: i), in: text).map { String(text[$0]) } ?? "" }
     }
 
     // MARK: Codex usage

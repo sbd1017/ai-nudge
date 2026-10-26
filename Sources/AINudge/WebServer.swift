@@ -90,7 +90,7 @@ final class WebServer {
             guard let new = try? JSONDecoder.iso.decode(Config.self, from: r.body) else {
                 return ("400 Bad Request", "text/plain", Data("bad settings".utf8))
             }
-            store.update(new)
+            store.update(new, fromWeb: true)
             return json(snapshot())
         case ("POST", "/api/send"):
             store.sendNow(r.query["id"] ?? "")
@@ -120,6 +120,7 @@ final class WebServer {
         let siteURL: String?
         let awake: String?
         let codexStatus: String
+        let resumePrompt: String
         let codexThreads: [Option]
         let today: String
         let nextNudge: String?
@@ -139,7 +140,8 @@ final class WebServer {
             defaultBrowser: defaultName,
             // Formatted here: browsers can report a different time zone (Firefox's fingerprinting protection uses UTC).
             status: Dictionary(uniqueKeysWithValues: store.config.nudges.map { n in
-                (n.id, ["next": store.nextText(n), "last": store.lastText(n), "failed": store.lastFailed(n) ? "1" : ""])
+                (n.id, ["next": store.nextText(n), "last": store.lastText(n), "failed": store.lastFailed(n) ? "1" : "",
+                        "reset": store.resetStatus(n) ?? ""])
             }),
             trusted: Sender.trusted,
             sending: store.sending,
@@ -147,6 +149,7 @@ final class WebServer {
             siteURL: store.siteURL?.absoluteString,
             awake: store.awakeText,
             codexStatus: store.codexStatusText,
+            resumePrompt: Nudge.resumePrompt,
             codexThreads: store.codexThreads.map { .init(id: $0.id, label: "\($0.name) · \(Store.short($0.updated))", chat: nil, note: nil) },
             today: Schedule.dayString(Date()),
             nextNudge: store.nextUp.map { Store.short($0.date) },

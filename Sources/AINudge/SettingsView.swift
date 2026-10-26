@@ -113,7 +113,9 @@ private struct NudgeEditor: View {
                         let next = Schedule.nextOccurrence(time: c.nudges[i].time, days: Array(1...7), after: Date()) ?? Date()
                         c.nudges[i].date = Schedule.dayString(next)
                     }
-                    if m == .reset { c.nudges[i].target = .codex }
+                    // a reset mode needs a target it can work with
+                    if m == .reset, !m.fits(c.nudges[i].target) { c.nudges[i].target = .codex; c.nudges[i].chat = "" }
+                    if m == .claudeReset, !m.fits(c.nudges[i].target) { c.nudges[i].target = .claudeApp; c.nudges[i].chat = "" }
                 }
             })
     }
@@ -155,7 +157,7 @@ private struct NudgeEditor: View {
                     switch n.mode {
                     case .weekly: DatePicker("", selection: time, displayedComponents: .hourAndMinute).labelsHidden()
                     case .once: DatePicker("", selection: moment, displayedComponents: [.date, .hourAndMinute]).labelsHidden()
-                    case .reset: EmptyView()
+                    case .reset, .claudeReset: EmptyView()
                     }
                     Button("Send Now") { store.sendNow(id) }.disabled(store.sending != nil)
                     Button(role: .destructive) {
@@ -187,9 +189,9 @@ private struct NudgeEditor: View {
                 if let note = n.target.note {
                     Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-                if n.mode == .reset {
-                    Text(n.target == .codex ? store.codexStatusText : "When Codex resets only works with the Codex target.")
-                        .font(.caption).foregroundStyle(n.target == .codex ? Color.secondary : Color.orange)
+                if let status = store.resetStatus(n) {
+                    Text(status)
+                        .font(.caption).foregroundStyle(n.mode.fits(n.target) ? Color.secondary : Color.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if n.target == .codex {
@@ -205,8 +207,18 @@ private struct NudgeEditor: View {
                 if let prompt = n.target.chatPrompt {
                     TextField(prompt, text: field(\.chat))
                 }
-                TextField("Message", text: field(\.message), axis: .vertical)
+                HStack {
+                    Text(n.target == .command ? "Command" : n.mode.isReset ? "Resume message" : "Message")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if n.mode.isReset, n.target != .command, n.message != Nudge.resumePrompt {
+                        Button("Use detailed resume prompt") { field(\.message).wrappedValue = Nudge.resumePrompt }
+                            .buttonStyle(.link).font(.caption)
+                    }
+                }
+                TextField(n.target == .command ? "e.g. ~/bin/after-reset.sh" : "Message", text: field(\.message), axis: .vertical)
                     .lineLimit(2...5)
+                    .font(n.target == .command ? .body.monospaced() : .body)
                 Text("Next: \(store.nextText(n)) · Last: \(store.lastText(n))")
                     .font(.caption)
                     .foregroundStyle(store.lastFailed(n) ? Color.orange : Color.secondary)

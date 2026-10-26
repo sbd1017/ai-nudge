@@ -87,7 +87,7 @@ enum Sender {
             return Plan(url: URL(string: "https://claude.ai/new?incognito"), app: browser, prefilled: false)
         case .claudeWebChat:
             return Plan(url: URL(string: "https://claude.ai/chat/\(try chat())"), app: browser, prefilled: false)
-        case .claudeCode, .codex:
+        case .claudeCode, .codex, .command:
             throw Failure.unsupported("sent through the command-line tool, not typed")
         case .custom:
             let link = n.chat.trimmingCharacters(in: .whitespaces)

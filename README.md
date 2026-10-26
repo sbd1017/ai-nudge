@@ -28,8 +28,11 @@ while Keep Awake is on, and happy eyes and a jiggle while a nudge is sending.
 ## Features
 
 - **Nudges on a schedule:** weekly at a time on chosen days, **once** at a date and time, or
-  **when Codex resets**: AI Nudge reads Codex's own usage data and, when you're out, sends a minute
-  after the limit resets, so the next window starts straight away. Add as many as you like.
+  **when Codex resets** / **when Claude resets**. In the reset modes, AI Nudge reads the service's
+  own usage data (Codex's app server, Claude Code's `/usage`; neither sends a message) and, when
+  you're out, sends a minute after the limit resets, so work picks up straight away. A reset
+  nudge's **Resume message** can be your own text or a detailed "carry on where you stopped"
+  prompt, one click away.
 - **Claude (app or browser) and Codex:**
 
   | Send to | How it gets there |
@@ -40,6 +43,7 @@ while Keep Awake is on, and happy eyes and a jiggle while a nudge is sending.
   | claude.ai in a browser: new / incognito / a chat you pick | `claude.ai/new?q=…`, `/new?incognito` or `/chat/<id>` |
   | Any link | opens it (`{message}` is replaced with your text), pastes unless the link carried it, presses Return |
   | Claude Code (command line) | runs `claude -p` (Claude Code, which comes with the Claude app); no typing |
+  | Run a command | runs your shell command with zsh, in the background (e.g. a script for after a reset). It can only be set or changed in the Mac window, never from the web page |
   | Codex (command line) | runs `codex exec` (Codex, which comes with the ChatGPT app); no typing. Choose a **Codex chat** to continue it (`codex exec resume`, in that chat's folder, allowed to change files there, in the background), or a new unsaved session that only starts the window |
 
   **Which window starts:** any Claude target starts your Claude usage window, which is shared with

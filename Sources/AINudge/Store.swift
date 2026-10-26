@@ -16,6 +16,8 @@ final class Store: ObservableObject {
     @Published private(set) var shake: CGFloat = 0     // the menu bar bubble jiggles while sending
     @Published private(set) var codexOutUntil: Date?    // from Codex's own usage data
     @Published private(set) var codexCheckedAt: Date?
+    @Published private(set) var claudeOutUntil: Date?   // from Claude Code's /usage
+    @Published private(set) var claudeCheckedAt: Date?
     @Published private(set) var codexThreads: [CLITools.CodexThread] = []   // for the "Codex chat" pickers
     private var threadsCheckedAt: Date?
 
@@ -27,6 +29,7 @@ final class Store: ObservableObject {
     private let awake = KeepAwake()
     private var shakeTimer: Timer?
     private var codexChecking = false
+    private var claudeChecking = false
 
     /// AI_NUDGE_DATA=<folder> keeps settings, state and log there instead (for trying things out).
     nonisolated private static let dataOverride = ProcessInfo.processInfo.environment["AI_NUDGE_DATA"].map { URL(fileURLWithPath: $0) }
@@ -72,7 +75,10 @@ final class Store: ObservableObject {
         case .once:
             return n.date.flatMap { Schedule.moment(date: $0, time: n.time) }.flatMap { $0 > now ? $0 : nil }
         case .reset:
-            guard n.target == .codex, let at = state.codexResumeAt, at > now else { return nil }
+            guard n.mode.fits(n.target), let at = state.codexResumeAt, at > now else { return nil }
+            return at
+        case .claudeReset:
+            guard n.mode.fits(n.target), let at = state.claudeResumeAt, at > now else { return nil }
             return at
         }
     }
@@ -85,7 +91,10 @@ final class Store: ObservableObject {
         case .once:
             return n.date.flatMap { Schedule.moment(date: $0, time: n.time) }.flatMap { $0 <= now ? $0 : nil }
         case .reset:
-            guard n.target == .codex, let at = state.codexResumeAt, at <= now else { return nil }
+            guard n.mode.fits(n.target), let at = state.codexResumeAt, at <= now else { return nil }
+            return at
+        case .claudeReset:
+            guard n.mode.fits(n.target), let at = state.claudeResumeAt, at <= now else { return nil }
             return at
         }
     }
@@ -104,6 +113,7 @@ final class Store: ObservableObject {
         now = Date()
         trusted = Sender.trusted
         refreshCodex()
+        refreshClaude()
         if let why = awake.check(stopOnLowBattery: config.awakeStopOnLowBattery) {
             record(why)
             awakeUntil = nil
@@ -131,6 +141,7 @@ final class Store: ObservableObject {
             }
             state.sent[n.id] = now    // recorded first: a failed send isn't retried in a loop
             if n.mode == .reset { state.codexResumeAt = nil }
+            if n.mode == .claudeReset { state.claudeResumeAt = nil }
             saveState()
             send(n)
             if n.mode == .once {      // done: switch it off
@@ -163,6 +174,7 @@ final class Store: ObservableObject {
             sending = nil
             stopShaking()
             if n.target == .codex { refreshCodex(force: true) }
+            if n.target.isClaude { refreshClaude(force: true) }
             check()
         }
     }
@@ -189,10 +201,11 @@ final class Store: ObservableObject {
 
     /// Takes settings from the web page. The token and port stay as they are, and nudges whose
     /// schedule changed don't catch up on times that already passed.
-    func update(_ new: Config) {
+    func update(_ new: Config, fromWeb: Bool = false) {
         var new = new
         new.token = config.token
         new.port = config.port
+        if fromWeb { protectCommands(&new) }
         let old = Dictionary(uniqueKeysWithValues: config.nudges.map { ($0.id, $0) })
         for n in new.nudges {
             if let o = old[n.id], o.time == n.time, o.days == n.days, o.enabled == n.enabled { continue }
@@ -210,6 +223,7 @@ final class Store: ObservableObject {
         saveState()
         if lanChanged { WebServer.shared.restart() }
         refreshCodex(force: true)
+        refreshClaude(force: true)
         check()
     }
 
@@ -218,7 +232,7 @@ final class Store: ObservableObject {
     /// check just after the reset (usage back) doesn't lose it.
     private func refreshCodex(force: Bool = false) {
         guard !codexChecking,
-              config.nudges.contains(where: { $0.enabled && $0.mode == .reset && $0.target == .codex }) else { return }
+              config.nudges.contains(where: { $0.enabled && $0.mode == .reset && $0.mode.fits($0.target) }) else { return }
         if !force, let last = codexCheckedAt, now.timeIntervalSince(last) < 600 { return }
         codexChecking = true
         Task {
@@ -254,6 +268,51 @@ final class Store: ObservableObject {
         return choices
     }
 
+    /// Asks Claude Code when Claude's usage runs out, for "When Claude resets" nudges (same rules as
+    /// for Codex: at most every 10 minutes, only while there's such a nudge, the resume time kept).
+    private func refreshClaude(force: Bool = false) {
+        guard !claudeChecking,
+              config.nudges.contains(where: { $0.enabled && $0.mode == .claudeReset && $0.mode.fits($0.target) }) else { return }
+        if !force, let last = claudeCheckedAt, now.timeIntervalSince(last) < 600 { return }
+        claudeChecking = true
+        Task {
+            let answer = await CLITools.claudeOutUntil()
+            claudeChecking = false
+            claudeCheckedAt = Date()
+            guard let outUntil = answer else { return }
+            claudeOutUntil = outUntil
+            if let until = outUntil {
+                let resume = until.addingTimeInterval(60)
+                if state.claudeResumeAt != resume {
+                    state.claudeResumeAt = resume
+                    saveState()
+                    record("Claude is out of usage until \(Store.short(until)); resume nudge at \(Store.short(resume))")
+                }
+            }
+            check()
+        }
+    }
+
+    /// What a "When Claude resets" nudge is waiting for, in words.
+    var claudeStatusText: String {
+        if let at = state.claudeResumeAt, at > now {
+            let until = claudeOutUntil.map { Store.short($0) } ?? Store.short(at.addingTimeInterval(-60))
+            return "Claude is out of usage until \(until), so this goes at \(Store.short(at))."
+        }
+        guard claudeCheckedAt != nil else { return "Checking Claude's usage…" }
+        return "Claude has usage left. This goes a minute after it next runs out and resets."
+    }
+
+    /// The status line for a reset nudge, or why it can't work with its target.
+    func resetStatus(_ n: Nudge) -> String? {
+        guard n.mode.isReset else { return nil }
+        guard n.mode.fits(n.target) else {
+            return n.mode == .reset ? "Codex resets only works with the Codex target (or a command)."
+                                    : "Claude resets only works with a Claude target (or a command)."
+        }
+        return n.mode == .reset ? codexStatusText : claudeStatusText
+    }
+
     /// What a "When Codex resets" nudge is waiting for, in words.
     var codexStatusText: String {
         if let at = state.codexResumeAt, at > now {
@@ -262,6 +321,23 @@ final class Store: ObservableObject {
         }
         guard codexCheckedAt != nil else { return "Checking Codex's usage…" }
         return "Codex has usage left. This goes a minute after it next runs out and resets."
+    }
+
+    /// The web page may switch command nudges on and off, reschedule or delete them, but never set a
+    /// command: a nudge that runs one keeps its command, and nothing else can become one.
+    private func protectCommands(_ new: inout Config) {
+        let old = Dictionary(uniqueKeysWithValues: config.nudges.map { ($0.id, $0) })
+        new.nudges = new.nudges.compactMap { n in
+            var n = n
+            guard let o = old[n.id] else { return n.target == .command ? nil : n }
+            if o.target == .command {
+                n.target = .command
+                n.message = o.message
+            } else if n.target == .command {
+                n.target = o.target
+            }
+            return n
+        }
     }
 
     /// Changes the settings in place (from the settings window).
@@ -318,6 +394,7 @@ final class Store: ObservableObject {
         case .weekly: return n.time
         case .once: return next(n).map(Store.short) ?? "once (done)"
         case .reset: return next(n).map { "after Codex resets, \(Store.short($0))" } ?? "after Codex resets"
+        case .claudeReset: return next(n).map { "after Claude resets, \(Store.short($0))" } ?? "after Claude resets"
         }
     }
 
@@ -327,7 +404,8 @@ final class Store: ObservableObject {
         switch n.mode {
         case .weekly: return "off"
         case .once: return "time has passed"
-        case .reset: return n.target == .codex ? "when Codex next resets" : "only works with Codex"
+        case .reset: return n.mode.fits(n.target) ? "when Codex next resets" : "only works with Codex"
+        case .claudeReset: return n.mode.fits(n.target) ? "when Claude next resets" : "only works with Claude"
         }
     }
 
