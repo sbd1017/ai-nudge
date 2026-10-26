@@ -14,6 +14,10 @@ final class Store: ObservableObject {
     @Published private(set) var now = Date()
     @Published private(set) var awakeUntil: KeepAwake.Until?
     @Published private(set) var shake: CGFloat = 0     // the menu bar bubble jiggles while sending
+    @Published private(set) var codexOutUntil: Date?    // from Codex's own usage data
+    @Published private(set) var codexCheckedAt: Date?
+    @Published private(set) var codexThreads: [CLITools.CodexThread] = []   // for the "Codex chat" pickers
+    private var threadsCheckedAt: Date?
 
     let firstRun: Bool
     var showSettingsWindow: (() -> Void)?
@@ -22,6 +26,7 @@ final class Store: ObservableObject {
     private var busyNoted = false
     private let awake = KeepAwake()
     private var shakeTimer: Timer?
+    private var codexChecking = false
 
     /// AI_NUDGE_DATA=<folder> keeps settings, state and log there instead (for trying things out).
     nonisolated private static let dataOverride = ProcessInfo.processInfo.environment["AI_NUDGE_DATA"].map { URL(fileURLWithPath: $0) }
@@ -60,7 +65,29 @@ final class Store: ObservableObject {
     // MARK: Schedule
 
     func next(_ n: Nudge) -> Date? {
-        n.enabled ? Schedule.nextOccurrence(time: n.time, days: n.days, after: now) : nil
+        guard n.enabled else { return nil }
+        switch n.mode {
+        case .weekly:
+            return Schedule.nextOccurrence(time: n.time, days: n.days, after: now)
+        case .once:
+            return n.date.flatMap { Schedule.moment(date: $0, time: n.time) }.flatMap { $0 > now ? $0 : nil }
+        case .reset:
+            guard n.target == .codex, let at = state.codexResumeAt, at > now else { return nil }
+            return at
+        }
+    }
+
+    /// The latest moment this nudge was due at or before now.
+    private func due(_ n: Nudge) -> Date? {
+        switch n.mode {
+        case .weekly:
+            return Schedule.lastOccurrence(time: n.time, days: n.days, before: now)
+        case .once:
+            return n.date.flatMap { Schedule.moment(date: $0, time: n.time) }.flatMap { $0 <= now ? $0 : nil }
+        case .reset:
+            guard n.target == .codex, let at = state.codexResumeAt, at <= now else { return nil }
+            return at
+        }
     }
 
     var nextUp: (name: String, date: Date)? {
@@ -76,6 +103,7 @@ final class Store: ObservableObject {
     func check() {
         now = Date()
         trusted = Sender.trusted
+        refreshCodex()
         if let why = awake.check(stopOnLowBattery: config.awakeStopOnLowBattery) {
             record(why)
             awakeUntil = nil
@@ -83,7 +111,7 @@ final class Store: ObservableObject {
         guard sending == nil else { return }
         let window = TimeInterval(config.catchUpMinutes * 60)
         for n in config.nudges where n.enabled {
-            guard let due = Schedule.lastOccurrence(time: n.time, days: n.days, before: now),
+            guard let due = due(n),
                   now.timeIntervalSince(due) <= window, handled(n.id) < due else { continue }
             // Typing needs an unlocked screen and nobody at the keyboard; the command-line targets don't.
             if !n.target.usesCLI {
@@ -102,8 +130,12 @@ final class Store: ObservableObject {
                 busyNoted = false
             }
             state.sent[n.id] = now    // recorded first: a failed send isn't retried in a loop
+            if n.mode == .reset { state.codexResumeAt = nil }
             saveState()
             send(n)
+            if n.mode == .once {      // done: switch it off
+                edit { c in if let i = c.nudges.firstIndex(where: { $0.id == n.id }) { c.nudges[i].enabled = false } }
+            }
             return
         }
     }
@@ -130,6 +162,7 @@ final class Store: ObservableObject {
             saveState()
             sending = nil
             stopShaking()
+            if n.target == .codex { refreshCodex(force: true) }
             check()
         }
     }
@@ -176,7 +209,59 @@ final class Store: ObservableObject {
         saveConfig()
         saveState()
         if lanChanged { WebServer.shared.restart() }
+        refreshCodex(force: true)
         check()
+    }
+
+    /// Asks Codex when its usage runs out, for "When Codex resets" nudges: at most every 10 minutes,
+    /// and only while there's such a nudge. The resume time is kept until that nudge goes, so a
+    /// check just after the reset (usage back) doesn't lose it.
+    private func refreshCodex(force: Bool = false) {
+        guard !codexChecking,
+              config.nudges.contains(where: { $0.enabled && $0.mode == .reset && $0.target == .codex }) else { return }
+        if !force, let last = codexCheckedAt, now.timeIntervalSince(last) < 600 { return }
+        codexChecking = true
+        Task {
+            let answer = await CLITools.codexOutUntil()
+            codexChecking = false
+            codexCheckedAt = Date()
+            guard let outUntil = answer else { return }      // couldn't ask; the next check tries again
+            codexOutUntil = outUntil
+            if let until = outUntil {
+                let resume = until.addingTimeInterval(60)
+                if state.codexResumeAt != resume {
+                    state.codexResumeAt = resume
+                    saveState()
+                    record("Codex is out of usage until \(Store.short(until)); resume nudge at \(Store.short(resume))")
+                }
+            }
+            check()
+        }
+    }
+
+    /// Refreshes the list of your Codex chats (at most once a minute unless forced).
+    func refreshCodexThreads(force: Bool = false) {
+        if !force, let t = threadsCheckedAt, Date().timeIntervalSince(t) < 60 { return }
+        threadsCheckedAt = Date()
+        Task { if let list = await CLITools.codexThreads() { codexThreads = list } }
+    }
+
+    /// The choices for a Codex nudge's chat: (value, label).
+    func codexChatChoices(current: String) -> [(String, String)] {
+        var choices = [("", "New unsaved session (only starts the window)"), ("latest", "Most recent chat")]
+        choices += codexThreads.map { ($0.id, "\($0.name) · \(Store.short($0.updated))") }
+        if !current.isEmpty, !choices.contains(where: { $0.0 == current }) { choices.append((current, "Saved chat")) }
+        return choices
+    }
+
+    /// What a "When Codex resets" nudge is waiting for, in words.
+    var codexStatusText: String {
+        if let at = state.codexResumeAt, at > now {
+            let until = codexOutUntil.map { Store.short($0) } ?? Store.short(at.addingTimeInterval(-60))
+            return "Codex is out of usage until \(until), so this goes at \(Store.short(at))."
+        }
+        guard codexCheckedAt != nil else { return "Checking Codex's usage…" }
+        return "Codex has usage left. This goes a minute after it next runs out and resets."
     }
 
     /// Changes the settings in place (from the settings window).
@@ -227,7 +312,24 @@ final class Store: ObservableObject {
 
     static func short(_ d: Date) -> String { shortDate.string(from: d) }
 
-    func nextText(_ n: Nudge) -> String { next(n).map(Store.short) ?? "off" }
+    /// When a nudge goes, short, for its switch in the menu.
+    func menuWhen(_ n: Nudge) -> String {
+        switch n.mode {
+        case .weekly: return n.time
+        case .once: return next(n).map(Store.short) ?? "once (done)"
+        case .reset: return next(n).map { "after Codex resets, \(Store.short($0))" } ?? "after Codex resets"
+        }
+    }
+
+    func nextText(_ n: Nudge) -> String {
+        if let d = next(n) { return Store.short(d) }
+        guard n.enabled else { return "off" }
+        switch n.mode {
+        case .weekly: return "off"
+        case .once: return "time has passed"
+        case .reset: return n.target == .codex ? "when Codex next resets" : "only works with Codex"
+        }
+    }
 
     /// "never", "sent Thu 09:06", or "failed Thu 09:06: why".
     func lastText(_ n: Nudge) -> String {

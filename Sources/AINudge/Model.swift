@@ -44,7 +44,7 @@ enum Target: String, Codable, CaseIterable {
         case .claudeCode:
             return "Runs the claude tool: starts your Claude usage window. No typing, so it works with the screen locked."
         case .codex:
-            return "Runs the codex tool: a Codex request, which starts your Work + Codex usage window. No typing, so it works with the screen locked."
+            return "Runs the codex tool: a Codex request, which starts your Work + Codex usage window. No typing, so it works with the screen locked. Pick a chat below to continue it; a new unsaved session only starts the window."
         case .custom:
             return nil
         }
@@ -69,6 +69,25 @@ struct Nudge: Codable, Identifiable, Equatable {
     var chat = ""
     var message = "hi"
     var enabled = true
+    var repeats: Repeat?          // nil means weekly (files from before this setting)
+    var date: String?             // "yyyy-MM-dd", for a nudge sent once
+
+    var mode: Repeat { repeats ?? .weekly }
+}
+
+/// How often a nudge goes out.
+enum Repeat: String, Codable, CaseIterable {
+    case weekly                   // at `time` on `days`
+    case once                     // at `time` on `date`, then it switches itself off
+    case reset                    // a minute after Codex's usage limit resets (Codex target only)
+
+    var label: String {
+        switch self {
+        case .weekly: return "Weekly"
+        case .once: return "Once"
+        case .reset: return "When Codex resets"
+        }
+    }
 }
 
 struct Config: Codable {
@@ -114,6 +133,7 @@ struct RunState: Codable {
     var sent: [String: Date] = [:]
     var armed: [String: Date] = [:]
     var outcomes: [String: Outcome] = [:]   // the last try of each nudge, scheduled or not
+    var codexResumeAt: Date?                 // when "When Codex resets" nudges go (reset + 1 min)
 
     struct Outcome: Codable {
         var date: Date
@@ -127,6 +147,7 @@ struct RunState: Codable {
         sent = try c.decodeIfPresent([String: Date].self, forKey: .sent) ?? [:]
         armed = try c.decodeIfPresent([String: Date].self, forKey: .armed) ?? [:]
         outcomes = try c.decodeIfPresent([String: Outcome].self, forKey: .outcomes) ?? [:]
+        codexResumeAt = try c.decodeIfPresent(Date.self, forKey: .codexResumeAt)
     }
 }
 

@@ -119,11 +119,15 @@ final class WebServer {
         let lanURL: String?
         let siteURL: String?
         let awake: String?
+        let codexStatus: String
+        let codexThreads: [Option]
+        let today: String
         let nextNudge: String?
         let log: [String]
     }
 
     private func snapshot() -> Snapshot {
+        store.refreshCodexThreads()
         var config = store.config
         config.token = ""
         let defaultID = Sender.defaultBrowser
@@ -142,6 +146,9 @@ final class WebServer {
             lanURL: store.lanURL?.absoluteString,
             siteURL: store.siteURL?.absoluteString,
             awake: store.awakeText,
+            codexStatus: store.codexStatusText,
+            codexThreads: store.codexThreads.map { .init(id: $0.id, label: "\($0.name) · \(Store.short($0.updated))", chat: nil, note: nil) },
+            today: Schedule.dayString(Date()),
             nextNudge: store.nextUp.map { Store.short($0.date) },
             log: store.log.reversed()
         )

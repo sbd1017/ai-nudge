@@ -44,6 +44,18 @@ enum Schedule {
         return nil
     }
 
+    /// A one-off moment: "yyyy-MM-dd" plus "HH:mm", local time.
+    static func moment(date: String, time: String, calendar cal: Calendar = .current) -> Date? {
+        let d = date.split(separator: "-").compactMap { Int($0) }
+        guard d.count == 3, let t = parseTime(time) else { return nil }
+        return cal.date(from: DateComponents(year: d[0], month: d[1], day: d[2], hour: t.hour, minute: t.minute))
+    }
+
+    static func dayString(_ date: Date, calendar cal: Calendar = .current) -> String {
+        let c = cal.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+    }
+
     /// The next scheduled moment after `now`, within the coming week.
     static func nextOccurrence(time: String, days: [Int], after now: Date, calendar cal: Calendar = .current) -> Date? {
         guard let t = parseTime(time) else { return nil }

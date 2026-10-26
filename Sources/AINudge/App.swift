@@ -78,7 +78,7 @@ struct MenuContent: View {
         }
         Divider()
         ForEach(store.config.nudges) { n in
-            Toggle("\(n.name)  \(n.time)", isOn: Binding(
+            Toggle("\(n.name)  \(store.menuWhen(n))", isOn: Binding(
                 get: { n.enabled },
                 set: { on in store.edit { c in if let i = c.nudges.firstIndex(where: { $0.id == n.id }) { c.nudges[i].enabled = on } } }))
         }

@@ -28,6 +28,8 @@ enum CLITools {
             (exe, args) = (p, ["-p", n.message, "--tools", "", "--strict-mcp-config", "--no-session-persistence"])
         case .codex:
             guard let p = findCodex() else { throw Failure.notFound("codex") }
+            let chat = n.chat.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !chat.isEmpty { return try await continueCodexChat(chat, message: n.message, codex: p) }
             (exe, args) = (p, ["exec", "--skip-git-repo-check", "--sandbox", "read-only", "--ephemeral",
                                "--cd", workDir.path, "--output-last-message", replyFile.path, "--", n.message])
         default:
@@ -43,6 +45,156 @@ enum CLITools {
         // Codex prints its whole session; the reply itself goes to the file. Claude prints just the reply.
         let reply = (try? String(contentsOf: replyFile, encoding: .utf8)) ?? text
         return reply.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: " ").prefix(160).description
+    }
+
+    // MARK: Codex chats
+
+    struct CodexThread: Identifiable, Equatable {
+        let id: String
+        let name: String
+        let cwd: String
+        let updated: Date
+    }
+
+    /// Your Codex chats (the ones in the ChatGPT app), newest first.
+    static func codexThreads(limit: Int = 25) async -> [CodexThread]? {
+        guard let exe = findCodex() else { return nil }
+        let messages = [
+            #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"ai-nudge","version":"1"}}}"#,
+            #"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
+            #"{"jsonrpc":"2.0","id":2,"method":"thread/list","params":{"limit":\#(limit)}}"#,
+        ]
+        guard let reply = await jsonRPC(exe, ["app-server"], send: messages, wantID: 2),
+              let data = (reply["result"] as? [String: Any])?["data"] as? [[String: Any]] else { return nil }
+        var seen = Set<String>()
+        return data.compactMap { t -> CodexThread? in
+            guard let id = t["id"] as? String, seen.insert(id).inserted else { return nil }
+            let updated = (t["updatedAt"] as? Double) ?? Double(t["updatedAt"] as? String ?? "") ?? 0
+            let name = (t["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                ?? (t["preview"] as? String).map { String($0.prefix(40)) } ?? id
+            return CodexThread(id: id, name: name, cwd: t["cwd"] as? String ?? "", updated: Date(timeIntervalSince1970: updated))
+        }
+        .sorted { $0.updated > $1.updated }
+    }
+
+    /// Sends the message into an existing Codex chat ("latest" = the most recent one), the way the app
+    /// would continue it: in the chat's own folder, allowed to change files there. It can take a while,
+    /// so it runs in the background and its reply is logged when it finishes.
+    private static func continueCodexChat(_ chat: String, message: String, codex: String) async throws -> String {
+        guard let threads = await codexThreads(limit: 50) else { throw Failure.failed("couldn't list your Codex chats") }
+        guard let t = chat == "latest" ? threads.first : threads.first(where: { $0.id == chat }) else {
+            throw Failure.failed("that Codex chat isn't there any more; pick another in Settings")
+        }
+        // A chat that's open in the ChatGPT app belongs to the app's own Codex (it holds the chat's
+        // lock), so the message goes through the app, like one typed there.
+        let (queued, queueOutput) = await run(codex, ["queue", "--thread", t.id, "--message", message], timeout: 60)
+        if queued == 0 { return "sent into Codex chat “\(t.name)” through the ChatGPT app" }
+        guard queueOutput.contains("No active session") else {
+            throw Failure.failed("codex queue failed: \(lastLine(queueOutput))")
+        }
+
+        // Not open in the app: continue it directly.
+        let folder = FileManager.default.fileExists(atPath: t.cwd) ? t.cwd : workDir.path
+        let replyTo = Store.dir.appendingPathComponent("reply-\(t.id).txt")
+        let errorsTo = Store.dir.appendingPathComponent("codex-\(t.id).log")
+        FileManager.default.createFile(atPath: errorsTo.path, contents: nil)
+        try? FileManager.default.removeItem(at: replyTo)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: codex)
+        p.arguments = ["exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "--cd", folder,
+                       "--output-last-message", replyTo.path, "resume", t.id, "--", message]
+        p.currentDirectoryURL = URL(fileURLWithPath: folder)
+        let errors = try? FileHandle(forWritingTo: errorsTo)
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = errors ?? FileHandle.nullDevice
+        p.standardInput = FileHandle.nullDevice
+        let name = t.name
+        let killer = DispatchWorkItem { if p.isRunning { p.terminate() } }
+        p.terminationHandler = { proc in
+            killer.cancel()
+            let reply = ((try? String(contentsOf: replyTo, encoding: .utf8)) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: " ")
+            try? errors?.close()
+            let why = lastLine((try? String(contentsOf: errorsTo, encoding: .utf8)) ?? "")
+            let line = proc.terminationStatus == 0
+                ? "Codex chat “\(name)” finished: \(reply.prefix(160))"
+                : "Codex chat “\(name)” stopped (exit \(proc.terminationStatus)): \(why.isEmpty ? reply.prefix(160).description : why)"
+            DispatchQueue.main.async { MainActor.assumeIsolated { Store.shared.record(line) } }
+            proc.terminationHandler = nil      // releases the process
+        }
+        do { try p.run() } catch { throw Failure.failed("couldn't start codex: \(error.localizedDescription)") }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3 * 3600, execute: killer)
+        return "continuing Codex chat “\(name)”"
+    }
+
+    /// The last non-empty line of a tool's output, for error messages.
+    private static func lastLine(_ text: String) -> String {
+        String(text.split(separator: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? "").prefix(200).description
+    }
+
+    // MARK: Codex usage
+
+    /// When Codex's usage runs out again: nil while there's usage left, otherwise the time the
+    /// exhausted window resets. Asked of Codex's own app server (no request is sent, so nothing is used).
+    static func codexOutUntil() async -> Date?? {
+        guard let exe = findCodex() else { return nil }
+        let messages = [
+            #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"ai-nudge","version":"1"}}}"#,
+            #"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
+            #"{"jsonrpc":"2.0","id":2,"method":"account/rateLimits/read","params":{}}"#,
+        ]
+        guard let reply = await jsonRPC(exe, ["app-server"], send: messages, wantID: 2),
+              let result = reply["result"] as? [String: Any],
+              let limits = result["rateLimits"] as? [String: Any] else { return nil }
+
+        let now = Date()
+        let windows = ["primary", "secondary"].compactMap { limits[$0] as? [String: Any] }
+        let full = windows.filter { ($0["usedPercent"] as? Double ?? 0) >= 100 }
+        let blocked = !(limits["rateLimitReachedType"] is NSNull || limits["rateLimitReachedType"] == nil)
+            || (result["ordinaryUsageAllowed"] as? Bool) == false
+        guard blocked || !full.isEmpty else { return .some(nil) }
+        // The latest reset among the full windows (or the 5-hour one if none says it's full).
+        let resets = (full.isEmpty ? Array(windows.prefix(1)) : full)
+            .compactMap { ($0["resetsAt"] as? Double).map { Date(timeIntervalSince1970: $0) } }
+            .filter { $0 > now }
+        return .some(resets.max())
+    }
+
+    /// Writes JSON-RPC lines to a tool's stdin and returns the reply with the given id.
+    private static func jsonRPC(_ exe: String, _ args: [String], send: [String], wantID: Int,
+                                timeout: TimeInterval = 20) async -> [String: Any]? {
+        await withCheckedContinuation { done in
+            DispatchQueue.global().async {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: exe)
+                p.arguments = args
+                let input = Pipe(), output = Pipe()
+                p.standardInput = input
+                p.standardOutput = output
+                p.standardError = FileHandle.nullDevice
+                do { try p.run() } catch { done.resume(returning: nil); return }
+                let killer = DispatchWorkItem { if p.isRunning { p.terminate() } }
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
+                input.fileHandleForWriting.write(Data((send.joined(separator: "\n") + "\n").utf8))
+
+                var buffer = Data()
+                var found: [String: Any]?
+                while found == nil {
+                    let chunk = output.fileHandleForReading.availableData
+                    if chunk.isEmpty { break }          // the tool exited (or the timeout ended it)
+                    buffer.append(chunk)
+                    while let nl = buffer.firstIndex(of: 0x0A) {
+                        let line = buffer[buffer.startIndex..<nl]
+                        buffer.removeSubrange(buffer.startIndex...nl)
+                        if let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                           obj["id"] as? Int == wantID { found = obj; break }
+                    }
+                }
+                killer.cancel()
+                if p.isRunning { p.terminate() }
+                done.resume(returning: found)
+            }
+        }
     }
 
     // MARK: Finding the tools

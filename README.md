@@ -27,8 +27,9 @@ while Keep Awake is on, and happy eyes and a jiggle while a nudge is sending.
 
 ## Features
 
-- **Nudges on a schedule:** a time, the days of the week, where it goes and what it says. Add as
-  many as you like.
+- **Nudges on a schedule:** weekly at a time on chosen days, **once** at a date and time, or
+  **when Codex resets**: AI Nudge reads Codex's own usage data and, when you're out, sends a minute
+  after the limit resets, so the next window starts straight away. Add as many as you like.
 - **Claude (app or browser) and Codex:**
 
   | Send to | How it gets there |
@@ -39,7 +40,7 @@ while Keep Awake is on, and happy eyes and a jiggle while a nudge is sending.
   | claude.ai in a browser: new / incognito / a chat you pick | `claude.ai/new?q=…`, `/new?incognito` or `/chat/<id>` |
   | Any link | opens it (`{message}` is replaced with your text), pastes unless the link carried it, presses Return |
   | Claude Code (command line) | runs `claude -p` (Claude Code, which comes with the Claude app); no typing |
-  | Codex (command line) | runs `codex exec` (Codex, which comes with the ChatGPT app); no typing |
+  | Codex (command line) | runs `codex exec` (Codex, which comes with the ChatGPT app); no typing. Choose a **Codex chat** to continue it (`codex exec resume`, in that chat's folder, allowed to change files there, in the background), or a new unsaved session that only starts the window |
 
   **Which window starts:** any Claude target starts your Claude usage window, which is shared with
   Claude Code. The **Codex** target starts the Work + Codex allowance, which begins with your first

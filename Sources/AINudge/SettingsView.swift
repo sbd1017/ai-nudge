@@ -100,6 +100,51 @@ private struct NudgeEditor: View {
             })
     }
 
+    /// Choosing Once starts from the next time this nudge's time comes round; When Codex resets
+    /// also switches the target to Codex.
+    private var mode: Binding<Repeat> {
+        Binding(
+            get: { nudge.mode },
+            set: { m in
+                store.edit { c in
+                    guard let i = c.nudges.firstIndex(where: { $0.id == id }) else { return }
+                    c.nudges[i].repeats = m
+                    if m == .once, c.nudges[i].date == nil {
+                        let next = Schedule.nextOccurrence(time: c.nudges[i].time, days: Array(1...7), after: Date()) ?? Date()
+                        c.nudges[i].date = Schedule.dayString(next)
+                    }
+                    if m == .reset { c.nudges[i].target = .codex }
+                }
+            })
+    }
+
+    /// Changing where a nudge goes clears its chat link or Codex chat, which belonged to the old target.
+    private var target: Binding<Target> {
+        Binding(
+            get: { nudge.target },
+            set: { t in
+                store.edit { c in
+                    guard let i = c.nudges.firstIndex(where: { $0.id == id }), c.nudges[i].target != t else { return }
+                    c.nudges[i].target = t
+                    c.nudges[i].chat = ""
+                }
+            })
+    }
+
+    private var moment: Binding<Date> {
+        Binding(
+            get: { nudge.date.flatMap { Schedule.moment(date: $0, time: nudge.time) } ?? Date() },
+            set: { d in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+                let day = Schedule.dayString(d), time = String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+                store.edit { cfg in
+                    guard let i = cfg.nudges.firstIndex(where: { $0.id == id }) else { return }
+                    cfg.nudges[i].date = day
+                    cfg.nudges[i].time = time
+                }
+            })
+    }
+
     var body: some View {
         let n = nudge
         GroupBox {
@@ -107,7 +152,11 @@ private struct NudgeEditor: View {
                 HStack {
                     Toggle("", isOn: field(\.enabled)).toggleStyle(.switch).labelsHidden()
                     TextField("Name", text: field(\.name)).font(.headline)
-                    DatePicker("", selection: time, displayedComponents: .hourAndMinute).labelsHidden()
+                    switch n.mode {
+                    case .weekly: DatePicker("", selection: time, displayedComponents: .hourAndMinute).labelsHidden()
+                    case .once: DatePicker("", selection: moment, displayedComponents: [.date, .hourAndMinute]).labelsHidden()
+                    case .reset: EmptyView()
+                    }
                     Button("Send Now") { store.sendNow(id) }.disabled(store.sending != nil)
                     Button(role: .destructive) {
                         store.edit { $0.nudges.removeAll { $0.id == id } }
@@ -115,6 +164,11 @@ private struct NudgeEditor: View {
                     .buttonStyle(.borderless)
                     .help("Delete")
                 }
+                Picker("Repeat", selection: mode) {
+                    ForEach(Repeat.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if n.mode == .weekly {
                 HStack(spacing: 4) {
                     ForEach(1...7, id: \.self) { day in
                         let on = n.days.contains(day)
@@ -126,11 +180,27 @@ private struct NudgeEditor: View {
                         .buttonStyle(DayStyle(on: on))
                     }
                 }
-                Picker("Send to", selection: field(\.target)) {
+                }
+                Picker("Send to", selection: target) {
                     ForEach(Target.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
                 if let note = n.target.note {
                     Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                if n.mode == .reset {
+                    Text(n.target == .codex ? store.codexStatusText : "When Codex resets only works with the Codex target.")
+                        .font(.caption).foregroundStyle(n.target == .codex ? Color.secondary : Color.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if n.target == .codex {
+                    Picker("Codex chat", selection: field(\.chat)) {
+                        ForEach(store.codexChatChoices(current: n.chat), id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                    .onAppear { store.refreshCodexThreads() }
+                    if !n.chat.isEmpty {
+                        Text("Continues that chat in its own folder, where it can change files, as it would in the app. It runs in the background; its reply shows in Activity.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 if let prompt = n.target.chatPrompt {
                     TextField(prompt, text: field(\.chat))
