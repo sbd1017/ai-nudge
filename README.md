@@ -61,7 +61,12 @@ while Keep Awake is on, and happy eyes and a jiggle while a nudge is sending.
 - **Careful typing:**
   - It only types once the chat is in front, and stops if you click or type while it's sending.
   - Scheduled nudges wait until you've been idle for 30 seconds.
+  - After pressing Return it checks the message left the chat's box, and presses Return again
+    (up to three times) if it didn't.
   - Your clipboard and the app you were using are put back afterwards.
+- **Notifications:** off, when a nudge fails (the default), or for every nudge. A failure
+  notification also comes when a nudge is waiting for you to unlock the Mac. Set it in Settings ›
+  General or on the web page; macOS asks for permission the first time.
 - **Sleep and lock aware:** a nudge missed while the Mac slept is sent when it wakes, up to 3 hours
   late by default. If the screen is locked, it waits until you unlock.
 

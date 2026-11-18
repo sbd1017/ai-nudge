@@ -103,6 +103,7 @@ enum CLITools {
         try? FileManager.default.removeItem(at: replyTo)
         let p = Process()
         p.executableURL = URL(fileURLWithPath: codex)
+        p.environment = toolEnvironment
         p.arguments = ["exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "--cd", folder,
                        "--output-last-message", replyTo.path, "resume", t.id, "--", message]
         p.currentDirectoryURL = URL(fileURLWithPath: folder)
@@ -121,7 +122,11 @@ enum CLITools {
             let line = proc.terminationStatus == 0
                 ? "Codex chat “\(name)” finished: \(reply.prefix(160))"
                 : "Codex chat “\(name)” stopped (exit \(proc.terminationStatus)): \(why.isEmpty ? reply.prefix(160).description : why)"
-            DispatchQueue.main.async { MainActor.assumeIsolated { Store.shared.record(line) } }
+            let failed = proc.terminationStatus != 0
+            DispatchQueue.main.async { MainActor.assumeIsolated {
+                Store.shared.record(line)
+                if failed { Store.shared.notify("Codex chat “\(name)” stopped", line, failed: true) }
+            } }
             proc.terminationHandler = nil      // releases the process
         }
         do { try p.run() } catch { throw Failure.failed("couldn't start codex: \(error.localizedDescription)") }
@@ -161,7 +166,11 @@ enum CLITools {
             try? handle?.close()
             let last = lastLine((try? String(contentsOf: output, encoding: .utf8)) ?? "")
             let line = "\(name): command \(proc.terminationStatus == 0 ? "finished" : "failed (exit \(proc.terminationStatus))")\(last.isEmpty ? "" : ": \(last)")"
-            DispatchQueue.main.async { MainActor.assumeIsolated { Store.shared.record(line) } }
+            let failed = proc.terminationStatus != 0
+            DispatchQueue.main.async { MainActor.assumeIsolated {
+                Store.shared.record(line)
+                if failed { Store.shared.notify("\(name): command failed", line, failed: true) }
+            } }
             proc.terminationHandler = nil
         }
         do { try p.run() } catch { throw Failure.failed("couldn't run the command: \(error.localizedDescription)") }
@@ -252,6 +261,7 @@ enum CLITools {
             DispatchQueue.global().async {
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: exe)
+                p.environment = toolEnvironment
                 p.arguments = args
                 let input = Pipe(), output = Pipe()
                 p.standardInput = input
@@ -311,10 +321,23 @@ enum CLITools {
     }
 
     /// On PATH, or the copy inside the ChatGPT app.
+    /// The ChatGPT app's own copy comes first: it's a native binary that matches the app's chats,
+    /// while an npm install on the PATH is a node script that can break when node moves.
     static func findCodex() -> String? {
-        onPath("codex")
-            ?? executable("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+        executable("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
             ?? executable("~/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+            ?? onPath("codex")
+    }
+
+    /// The tools' environment, with the usual install folders on PATH. Apps start with a bare
+    /// PATH, and a tool installed with npm needs to find node there.
+    static var toolEnvironment: [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        var dirs = (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin").split(separator: ":").map(String.init)
+        for d in ["~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"].map({ ($0 as NSString).expandingTildeInPath })
+        where !dirs.contains(d) { dirs.append(d) }
+        env["PATH"] = dirs.joined(separator: ":")
+        return env
     }
 
     // MARK: Running
@@ -325,6 +348,7 @@ enum CLITools {
                 try? FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: exe)
+                p.environment = toolEnvironment
                 p.arguments = args
                 p.currentDirectoryURL = workDir     // an empty folder, so no project files get picked up
                 let pipe = Pipe()

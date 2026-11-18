@@ -6,7 +6,10 @@ import SystemConfiguration
 final class Store: ObservableObject {
     static let shared = Store()
 
-    @Published private(set) var config: Config
+    @Published private(set) var config: Config {
+        didSet { if config.notify != oldValue.notify, config.notify != .off { refreshNotifications(ask: true) } }
+    }
+    @Published private(set) var notificationsAllowed: Bool?     // nil: not checked, or not answered yet
     @Published private(set) var state: RunState
     @Published private(set) var log: [String] = []
     @Published private(set) var sending: String?
@@ -51,6 +54,8 @@ final class Store: ObservableObject {
     }
 
     func start() {
+        Notifier.setUp()
+        refreshNotifications(ask: config.notify != .off)
         timer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { _ in
             MainActor.assumeIsolated { Store.shared.check() }
         }
@@ -112,6 +117,7 @@ final class Store: ObservableObject {
     func check() {
         now = Date()
         trusted = Sender.trusted
+        if config.notify != .off { refreshNotifications() }    // you may change it in System Settings
         refreshCodex()
         refreshClaude()
         if let why = awake.check(stopOnLowBattery: config.awakeStopOnLowBattery) {
@@ -126,7 +132,10 @@ final class Store: ObservableObject {
             // Typing needs an unlocked screen and nobody at the keyboard; the command-line targets don't.
             if !n.target.usesCLI {
                 if Sender.screenLocked() {
-                    if !lockedNoted { record("\(n.name): screen is locked; will send when it's unlocked") }
+                    if !lockedNoted {
+                        record("\(n.name): screen is locked; will send when it's unlocked")
+                        notify("\(n.name) is waiting", "The screen is locked, so it can't type. It will send when you unlock the Mac.", failed: true)
+                    }
                     lockedNoted = true
                     continue
                 }
@@ -165,9 +174,11 @@ final class Store: ObservableObject {
             do {
                 let reply = try await Sender.send(n, config: config)
                 record("\(n.name): sent (\(n.target.label))" + (reply.map { ": \($0)" } ?? ""))
+                notify("\(n.name) sent", n.target.label + (reply.map { ": \($0)" } ?? ""), failed: false)
             } catch {
                 failure = error.localizedDescription
                 record("\(n.name): not sent: \(error.localizedDescription)")
+                notify("\(n.name) wasn't sent", error.localizedDescription.prefix(1).uppercased() + error.localizedDescription.dropFirst(), failed: true)
             }
             state.outcomes[n.id] = .init(date: Date(), error: failure)
             saveState()
@@ -418,6 +429,20 @@ final class Store: ObservableObject {
     func lastFailed(_ n: Nudge) -> Bool { state.outcomes[n.id]?.error != nil }
 
     func refreshTrust() { trusted = Sender.trusted }
+
+    /// Posts a notification if the setting covers it: failures, or every nudge.
+    func notify(_ title: String, _ body: String, failed: Bool) {
+        guard config.notify == .all || (failed && config.notify == .failures) else { return }
+        Notifier.post(title, body)
+    }
+
+    /// Checks whether macOS lets AI Nudge notify, asking first if `ask` (macOS only asks once).
+    func refreshNotifications(ask: Bool = false) {
+        Task {
+            let ok = ask ? await Notifier.ask() : await Notifier.allowed()
+            if notificationsAllowed != ok { notificationsAllowed = ok }
+        }
+    }
 
     func record(_ line: String) {
         let entry = "\(Store.stamp.string(from: Date())) \(line)"

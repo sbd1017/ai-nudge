@@ -36,8 +36,10 @@ let settingsPage = #"""
         <label class="check"><input id="restore" type="checkbox"> Go back to the app I was using</label>
         <label class="check"><input id="lan" type="checkbox"> Let other devices on my network open this page</label>
       </div>
+      <label>Notifications on the Mac<select id="notify"><option value="off">Off</option><option value="failures">When a nudge fails</option><option value="all">Every nudge</option></select></label>
       <label>Address on your own site (optional, see README)<input id="public" type="text" placeholder="https://example.com/ainudge/"></label>
     </div>
+    <p id="notifywarn" class="hint bad" hidden>macOS has notifications turned off for AI Nudge. Turn them on in System Settings › Notifications › AI Nudge.</p>
     <p id="lanlink" class="hint" hidden></p>
   </div>
 
@@ -124,7 +126,7 @@ button:disabled { opacity: .5; cursor: default; }
 .switch input:checked + span::after { transform: translateX(16px); }
 .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 .meta { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
-.meta.bad { color: var(--warn); }
+.meta.bad, .hint.bad { color: var(--warn); }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
 .check { display: flex; gap: 8px; align-items: center; color: var(--ink); font-size: 14px; }
 .check input { width: 16px; height: 16px; margin: 0; }
@@ -277,6 +279,7 @@ function render() {
   document.getElementById("restore").checked = c.restoreFocus;
   document.getElementById("lan").checked = c.allowLAN;
   document.getElementById("public").value = c.publicURL;
+  document.getElementById("notify").value = c.notify || "failures";
   document.getElementById("awakeDisplay").checked = c.awakeLetDisplaySleep;
   document.getElementById("awakeBattery").checked = c.awakeStopOnLowBattery;
   status();
@@ -309,6 +312,7 @@ function status() {
     const cn = card.querySelector("[data-codex]");
     if (cn && n) cn.textContent = (S.status[id] || {}).reset || "";
   }
+  document.getElementById("notifywarn").hidden = !(S.notificationsAllowed === false && S.config.notify !== "off");
   document.getElementById("log").textContent = S.log.join("\n") || "Nothing yet.";
   const lan = document.getElementById("lanlink");
   lan.hidden = !S.lanURL;
@@ -326,6 +330,7 @@ document.getElementById("settle").onchange = e => { S.config.settleSeconds = Mat
 document.getElementById("catchup").onchange = e => { S.config.catchUpMinutes = Math.max(0, Math.round(+e.target.value || 0)); save(); };
 document.getElementById("restore").onchange = e => { S.config.restoreFocus = e.target.checked; save(); };
 document.getElementById("lan").onchange = e => { S.config.allowLAN = e.target.checked; save(); };
+document.getElementById("notify").onchange = e => { S.config.notify = e.target.value; save(); status(); };
 document.getElementById("awakeFor").onchange = async e => {
   merge(await api("POST", "/api/awake?minutes=" + e.target.value));
 };

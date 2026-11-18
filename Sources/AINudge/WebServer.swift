@@ -115,6 +115,7 @@ final class WebServer {
         let defaultBrowser: String
         let status: [String: [String: String]]
         let trusted: Bool
+        let notificationsAllowed: Bool?
         let sending: String?
         let lanURL: String?
         let siteURL: String?
@@ -144,6 +145,7 @@ final class WebServer {
                         "reset": store.resetStatus(n) ?? ""])
             }),
             trusted: Sender.trusted,
+            notificationsAllowed: store.notificationsAllowed,
             sending: store.sending,
             lanURL: store.lanURL?.absoluteString,
             siteURL: store.siteURL?.absoluteString,

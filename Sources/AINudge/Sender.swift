@@ -6,7 +6,7 @@ import ApplicationServices
 enum Sender {
     static let claudeApp = "com.anthropic.claudefordesktop"
     enum Failure: LocalizedError {
-        case noAccessibility, locked, missingChat, badLink(String), appMissing(String), wrongApp(String?), interrupted, unsupported(String)
+        case noAccessibility, locked, missingChat, badLink(String), appMissing(String), wrongApp(String?), interrupted, notSent, unsupported(String)
 
         var errorDescription: String? {
             switch self {
@@ -18,6 +18,7 @@ enum Sender {
             case .wrongApp(let front): return "the chat didn't come to the front (\(front ?? "nothing") did), so nothing was typed"
             case .unsupported(let why): return why
             case .interrupted: return "you clicked or typed while it was sending, so it stopped before typing anything"
+            case .notSent: return "it typed the message, but the chat didn't send it (Return was pressed three times)"
             }
         }
     }
@@ -145,6 +146,16 @@ enum Sender {
         let front = ws.frontmostApplication?.bundleIdentifier
         guard front == plan.app else { throw Failure.wrongApp(ws.frontmostApplication?.localizedName) }
 
+        // Electron apps such as Claude only build their accessibility tree when asked, and take a
+        // moment to do it, so ask now; it's read after Return to check the message went. Put back after.
+        let axApp = NSRunningApplication.runningApplications(withBundleIdentifier: plan.app).first
+            .map { AXUIElementCreateApplication($0.processIdentifier) }
+        let manual = "AXManualAccessibility" as CFString
+        var axBefore: CFTypeRef?
+        let axWasOn = axApp.map { AXUIElementCopyAttributeValue($0, manual, &axBefore) == .success && (axBefore as? Bool) == true } ?? true
+        if let axApp, !axWasOn { AXUIElementSetAttributeValue(axApp, manual, kCFBooleanTrue) }
+        defer { if let axApp, !axWasOn { AXUIElementSetAttributeValue(axApp, manual, kCFBooleanFalse) } }
+
         if userActed(since: start) { throw Failure.interrupted }
         if let shortcut = plan.shortcut {
             key(shortcut.key, shortcut.flags)
@@ -155,19 +166,63 @@ enum Sender {
         if !plan.prefilled {
             clipboard = copy(n.message)
             key(9, .maskCommand)                  // ⌘V
-            try await pause(0.5)
+            try await pause(1)
         }
         if userActed(since: start) {
             if let clipboard { restore(clipboard) }
             throw Failure.interrupted
         }
         key(36)                                   // Return
-        try await pause(1)
+        let outcome = try await confirmSent(n.message, in: axApp, app: plan.app, start: start)
         if let clipboard { restore(clipboard) }
         if config.restoreFocus, let previous, previous.bundleIdentifier != plan.app {
             previous.activate(options: [])
         }
-        return nil
+        switch outcome {
+        case .sent: return nil
+        case .unchecked: return "couldn't read the message box to check it went"
+        case .stuck: throw Failure.notSent
+        }
+    }
+
+    enum SendCheck { case sent, unchecked, stuck }
+
+    /// After Return, reads the chat's message box through Accessibility. While the message is still
+    /// sitting there (Return can land before the chat is ready for it), presses Return again, up to
+    /// three presses in all. Return in an empty box does nothing, so a press too many is harmless.
+    private static func confirmSent(_ message: String, in element: AXUIElement?, app: String, start: Date) async throws -> SendCheck {
+        guard let element else { return .unchecked }
+        let want = squash(message)
+        for press in 1...3 {
+            try await pause(1.5)
+            let canPress = !userActed(since: start) && NSWorkspace.shared.frontmostApplication?.bundleIdentifier == app
+            guard let text = focusedText(element) else {
+                // Can't see the box: one more Return covers a press that came too early.
+                if press == 1, canPress { key(36); try await pause(1) }
+                return .unchecked
+            }
+            let box = squash(text)
+            let stillThere = box == want || (want.count >= 8 && box.contains(want))
+            if !stillThere { return .sent }
+            if press == 3 || !canPress { return .stuck }
+            key(36)
+        }
+        return .stuck
+    }
+
+    /// The text of whatever has keyboard focus in the app, if it has any.
+    private static func focusedText(_ app: AXUIElement) -> String? {
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+              let f = focused, CFGetTypeID(f) == AXUIElementGetTypeID() else { return nil }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(f as! AXUIElement, kAXValueAttribute as CFString, &value) == .success
+        else { return nil }
+        return value as? String
+    }
+
+    private static func squash(_ s: String) -> String {
+        s.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     private static func pause(_ seconds: Double) async throws {

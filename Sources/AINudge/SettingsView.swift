@@ -22,6 +22,7 @@ struct SettingsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             store.refreshTrust()
+            store.refreshNotifications()
         }
     }
 }
@@ -275,6 +276,30 @@ private struct GeneralTab: View {
                     }
                 }
             Toggle("Go back to the app I was using", isOn: setting(\.restoreFocus))
+            Section("Notifications") {
+                Picker("Notify me", selection: setting(\.notify)) {
+                    ForEach(NotifyLevel.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                if store.config.notify != .off {
+                    if store.notificationsAllowed == false {
+                        HStack {
+                            Text("macOS has notifications turned off for AI Nudge.")
+                                .font(.caption).foregroundStyle(.orange)
+                            Spacer()
+                            Button("Open Notification Settings…") { NSWorkspace.shared.open(Notifier.settingsURL) }
+                        }
+                    } else {
+                        HStack {
+                            Text(store.config.notify == .failures
+                                 ? "Tells you when a nudge can't send, or is waiting for you to unlock the Mac."
+                                 : "Tells you each time a nudge goes, and when one can't.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Test") { Notifier.post("AI Nudge", "Notifications are working.") }
+                        }
+                    }
+                }
+            }
             Section("Keep Awake (from the menu bar)") {
                 Toggle("Let the display sleep, just keep the Mac awake", isOn: setting(\.awakeLetDisplaySleep))
                 Toggle("Stop when the battery is below 10%", isOn: setting(\.awakeStopOnLowBattery))

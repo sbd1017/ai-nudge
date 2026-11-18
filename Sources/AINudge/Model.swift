@@ -126,6 +126,7 @@ struct Config: Codable {
     var publicURL = ""            // where a reverse proxy on your own site serves the settings page
     var awakeLetDisplaySleep = false   // keep awake: only the Mac, not the screen
     var awakeStopOnLowBattery = true
+    var notify = NotifyLevel.failures     // macOS notifications: off, failures, every nudge
     var token = Config.newToken()
 
     static func newToken() -> String {
@@ -148,6 +149,7 @@ struct Config: Codable {
         publicURL = try c.decodeIfPresent(String.self, forKey: .publicURL) ?? d.publicURL
         awakeLetDisplaySleep = try c.decodeIfPresent(Bool.self, forKey: .awakeLetDisplaySleep) ?? d.awakeLetDisplaySleep
         awakeStopOnLowBattery = try c.decodeIfPresent(Bool.self, forKey: .awakeStopOnLowBattery) ?? d.awakeStopOnLowBattery
+        notify = (try? c.decodeIfPresent(NotifyLevel.self, forKey: .notify)) ?? d.notify
         token = try c.decodeIfPresent(String.self, forKey: .token) ?? d.token
     }
 }
