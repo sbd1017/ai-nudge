@@ -71,8 +71,7 @@ while Keep Awake is on, and happy eyes and a jiggle while a nudge is sending.
   late by default. If the screen is locked, it waits until you unlock.
 
 <p align="center">
-  <img src="docs/screenshots/web-light.png" width="380" alt="The web settings page, light">
-  <img src="docs/screenshots/web-dark.png" width="380" alt="The web settings page, dark">
+  <img src="docs/screenshots/web-dark.png" width="380" alt="The web settings page (always dark)">
 </p>
 
 ## Install

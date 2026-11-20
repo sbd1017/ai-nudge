@@ -79,7 +79,7 @@ final class WebServer {
         default: break
         }
         guard r.token == store.config.token else {
-            return ("403 Forbidden", "text/plain; charset=utf-8", Data("This page needs AI Nudge's secret link. On the Mac, copy the link from AI Nudge's Settings › General.\n".utf8))
+            return errorPage("403 Forbidden", "This page needs AI Nudge's secret link. On the Mac, copy the link from AI Nudge's Settings › General.", r)
         }
         switch (r.method, r.path) {
         case ("GET", "/"):
@@ -103,8 +103,32 @@ final class WebServer {
             Sender.requestTrust()
             return json(snapshot())
         default:
-            return ("404 Not Found", "text/plain", Data("not found".utf8))
+            return errorPage("404 Not Found", "not found", r)
         }
+    }
+
+    // Pages opened in a browser get a small dark page (the site is always dark); the script's API calls
+    // keep plain text, which it shows as the error.
+    private func errorPage(_ status: String, _ message: String, _ r: Request) -> (String, String, Data) {
+        guard r.method == "GET", !r.path.hasPrefix("/api/") else {
+            return (status, "text/plain; charset=utf-8", Data((message + "\n").utf8))
+        }
+        let text = message.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+        let html = """
+        <!doctype html>
+        <html lang="en">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="color-scheme" content="dark">
+        <meta name="theme-color" content="#161615">
+        <title>AI Nudge</title>
+        <link rel="stylesheet" href="app.css">
+        </head>
+        <body><main><p>\(text)</p></main></body>
+        </html>
+        """
+        return (status, "text/html; charset=utf-8", Data(html.utf8))
     }
 
     private struct Snapshot: Encodable {

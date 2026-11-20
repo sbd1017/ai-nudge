@@ -70,6 +70,11 @@ struct MenuContent: View {
         if let last = store.log.last {
             Text(last.split(separator: " ").dropFirst(2).joined(separator: " ")).lineLimit(1)
         }
+        if store.claudeProblem == "Claude Code is signed out" {
+            Button("⚠︎ Sign in to Claude Code…") { store.signInToClaudeCode() }
+        } else if store.claudeLoginEndingSoon, let ends = store.claudeLoginEnds {
+            Button("⚠︎ Sign in to Claude Code… (runs out \(Store.day(ends)))") { store.signInToClaudeCode() }
+        }
         if !store.trusted {
             Button("⚠︎ Allow Accessibility…") {
                 Sender.requestTrust()

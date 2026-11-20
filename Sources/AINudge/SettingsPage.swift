@@ -6,6 +6,8 @@ let settingsPage = #"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#161615">
 <title>AI Nudge</title>
 <link rel="stylesheet" href="app.css">
 </head>
@@ -71,17 +73,11 @@ let settingsPage = #"""
 """#
 
 let settingsCSS = #"""
+/* Always dark, whatever the device's light/dark setting. */
 :root {
-  --bg: #f6f6f4; --card: #ffffff; --ink: #1c1c1a; --muted: #6b6b66; --line: #e2e2dc;
-  --accent: #c2410c; --accent-ink: #ffffff; --ok: #15803d; --warn: #b45309; --chip: #efefea;
-  color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #161615; --card: #20201e; --ink: #ececea; --muted: #9a9a94; --line: #34342f;
-    --accent: #fb923c; --accent-ink: #1c1206; --ok: #4ade80; --warn: #fbbf24; --chip: #2b2b28;
-    color-scheme: dark;
-  }
+  --bg: #161615; --card: #20201e; --ink: #ececea; --muted: #9a9a94; --line: #34342f;
+  --accent: #fb923c; --accent-ink: #1c1206; --ok: #4ade80; --warn: #fbbf24; --chip: #2b2b28;
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }

@@ -6,7 +6,7 @@ import ApplicationServices
 enum Sender {
     static let claudeApp = "com.anthropic.claudefordesktop"
     enum Failure: LocalizedError {
-        case noAccessibility, locked, missingChat, badLink(String), appMissing(String), wrongApp(String?), interrupted, notSent, unsupported(String)
+        case noAccessibility, locked, missingChat, badLink(String), appMissing(String), wrongApp(String?), interrupted, notSent, notPasted, unconfirmed, unsupported(String)
 
         var errorDescription: String? {
             switch self {
@@ -19,6 +19,8 @@ enum Sender {
             case .unsupported(let why): return why
             case .interrupted: return "you clicked or typed while it was sending, so it stopped before typing anything"
             case .notSent: return "it typed the message, but the chat didn't send it (Return was pressed three times)"
+            case .notPasted: return "the message didn't appear in the chat's box, so Return wasn't pressed"
+            case .unconfirmed: return "the chat's message box couldn't be read, so it can't tell whether the message went"
             }
         }
     }
@@ -161,12 +163,19 @@ enum Sender {
             key(shortcut.key, shortcut.flags)
             try await pause(max(1.5, config.settleSeconds / 2))
         }
+        // Wait until the chat's message box has focus and can be read. A freshly started app takes
+        // a while to get there, and anything pasted before then is lost.
+        let canSee = try await waitForBox(axApp, start: start)
         var clipboard: [NSPasteboardItem]?
         if userActed(since: start) { throw Failure.interrupted }
         if !plan.prefilled {
             clipboard = copy(n.message)
             key(9, .maskCommand)                  // ⌘V
             try await pause(1)
+            if canSee, let axApp, !(try await boxShows(n.message, in: axApp)) {
+                if let clipboard { restore(clipboard) }
+                throw Failure.notPasted
+            }
         }
         if userActed(since: start) {
             if let clipboard { restore(clipboard) }
@@ -180,12 +189,33 @@ enum Sender {
         }
         switch outcome {
         case .sent: return nil
-        case .unchecked: return "couldn't read the message box to check it went"
+        case .unchecked: throw Failure.unconfirmed
         case .stuck: throw Failure.notSent
         }
     }
 
     enum SendCheck { case sent, unchecked, stuck }
+
+    /// Waits up to 15 s for the app's focused text box to be readable. False if it never is.
+    private static func waitForBox(_ app: AXUIElement?, start: Date) async throws -> Bool {
+        guard let app else { return false }
+        for _ in 0..<30 {
+            if focusedText(app) != nil { return true }
+            if userActed(since: start) { throw Failure.interrupted }
+            try await pause(0.5)
+        }
+        return false
+    }
+
+    /// Whether the message shows up in the focused box within 3 s of pasting.
+    private static func boxShows(_ message: String, in app: AXUIElement) async throws -> Bool {
+        let want = squash(message)
+        for _ in 0..<6 {
+            if let text = focusedText(app), squash(text).contains(want) { return true }
+            try await pause(0.5)
+        }
+        return false
+    }
 
     /// After Return, reads the chat's message box through Accessibility. While the message is still
     /// sitting there (Return can land before the chat is ready for it), presses Return again, up to

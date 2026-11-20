@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// Sends a nudge through Claude Code or Codex, the command-line tools that come inside the Claude
 /// and ChatGPT apps. A Codex request is what starts the Work + Codex allowance; a ChatGPT chat
@@ -183,17 +183,55 @@ enum CLITools {
     /// When Claude's usage runs out again: nil while there's usage left, otherwise when the full
     /// window (5-hour session or weekly) resets. From Claude Code's /usage, which reports usage and
     /// sends no message.
-    static func claudeOutUntil() async -> Date?? {
-        guard let exe = findClaude() else { return nil }
+    enum ClaudeUsage {
+        case out(until: Date?)       // nil: there's usage left
+        case signedOut               // Claude Code isn't signed in, so /usage only shows costs
+        case unreadable(String)      // why
+    }
+
+    static func claudeUsage() async -> ClaudeUsage {
+        guard let exe = findClaude() else { return .unreadable("Claude Code wasn't found") }
         let (status, out) = await run(exe, ["-p", "/usage", "--tools", "", "--strict-mcp-config", "--no-session-persistence"], timeout: 60)
-        guard status == 0, out.contains("Current session") else { return nil }
+        guard status == 0, out.contains("Current session") else {
+            // Signed out, /usage prints only costs. Ask Claude Code which it is.
+            let (_, auth) = await run(exe, ["auth", "status"], timeout: 30)
+            if let data = auth.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               json["loggedIn"] as? Bool == false { return .signedOut }
+            let why = lastLine(out)
+            return .unreadable(why.isEmpty ? "Claude Code's /usage didn't show the session" : String(why.prefix(160)))
+        }
         var resets: [Date] = []
         for line in out.split(separator: "\n").map(String.init) where line.hasPrefix("Current ") {
             guard let pct = firstMatch(#"(\d+)% used"#, in: line).flatMap({ Int($0[0]) }), pct >= 100 else { continue }
-            guard let at = parseReset(line) else { return nil }      // full, but no time we can read: ask again later
+            guard let at = parseReset(line) else { return .unreadable("full, but the reset time couldn't be read: \(line.prefix(120))") }
             resets.append(at)
         }
-        return .some(resets.max())
+        return .out(until: resets.max())
+    }
+
+    /// When Claude Code's sign-in runs out (`auth status` reports it), if it's signed in.
+    static func claudeLoginEnds() async -> Date? {
+        guard let exe = findClaude() else { return nil }
+        let (_, out) = await run(exe, ["auth", "status"], timeout: 30)
+        guard let data = out.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["loggedIn"] as? Bool == true, let text = json["loginExpiresAt"] as? String else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+    }
+
+    /// Opens Terminal on Claude Code's sign-in: your browser asks you to approve, then you paste
+    /// the code it shows into Terminal.
+    static func openClaudeSignIn() -> Bool {
+        guard let exe = findClaude() else { return false }
+        let script = Store.dir.appendingPathComponent("sign-in-to-claude-code.command")
+        let quoted = "'" + exe.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let text = "#!/bin/zsh\necho 'Signing in to Claude Code for AI Nudge. Approve in your browser, then paste the code here.'\n\(quoted) auth login --claudeai\n"
+        guard (try? text.write(to: script, atomically: true, encoding: .utf8)) != nil else { return false }
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+        return NSWorkspace.shared.open(script)
     }
 
     /// "… resets Oct 27 at 3am (Europe/London)" or "… resets 4:30pm" → that moment, local time.

@@ -21,6 +21,18 @@ final class Store: ObservableObject {
     @Published private(set) var codexCheckedAt: Date?
     @Published private(set) var claudeOutUntil: Date?   // from Claude Code's /usage
     @Published private(set) var claudeCheckedAt: Date?
+    @Published private(set) var claudeProblem: String?        // why Claude's usage can't be read, if it can't
+    @Published private(set) var claudeLoginEnds: Date?        // when Claude Code's sign-in runs out
+    private var claudeLoginCheckedAt: Date?
+    private var claudeLoginWarned: Date?                       // the end date we've already warned about
+
+    /// "18 Dec, 17:48": a date and time for things days away.
+    static func day(_ d: Date) -> String { d.formatted(.dateTime.day().month(.abbreviated).hour().minute()) }
+
+    /// Claude Code's sign-in runs out within 3 days: time to sign in again.
+    var claudeLoginEndingSoon: Bool {
+        claudeLoginEnds.map { $0.timeIntervalSince(now) < 3 * 86400 } ?? false
+    }
     @Published private(set) var codexThreads: [CLITools.CodexThread] = []   // for the "Codex chat" pickers
     private var threadsCheckedAt: Date?
 
@@ -126,9 +138,10 @@ final class Store: ObservableObject {
         }
         guard sending == nil else { return }
         let window = TimeInterval(config.catchUpMinutes * 60)
-        for n in config.nudges where n.enabled {
-            guard let due = due(n),
-                  now.timeIntervalSince(due) <= window, handled(n.id) < due else { continue }
+        for n in config.nudges where n.enabled || retries[n.id] != nil {   // a once-nudge switches off when sent
+            let retry = retries[n.id].map { $0.at <= now } ?? false
+            guard retry || (due(n).map { now.timeIntervalSince($0) <= window && handled(n.id) < $0 } ?? false)
+            else { continue }
             // Typing needs an unlocked screen and nobody at the keyboard; the command-line targets don't.
             if !n.target.usesCLI {
                 if Sender.screenLocked() {
@@ -152,7 +165,7 @@ final class Store: ObservableObject {
             if n.mode == .reset { state.codexResumeAt = nil }
             if n.mode == .claudeReset { state.claudeResumeAt = nil }
             saveState()
-            send(n)
+            send(n, scheduled: true)
             if n.mode == .once {      // done: switch it off
                 edit { c in if let i = c.nudges.firstIndex(where: { $0.id == n.id }) { c.nudges[i].enabled = false } }
             }
@@ -166,19 +179,42 @@ final class Store: ObservableObject {
         send(n)
     }
 
-    private func send(_ n: Nudge) {
+    /// A scheduled nudge that typed but couldn't be confirmed (or didn't send) is tried again, two
+    /// minutes apart, up to three tries in all. Kept in memory: an app restart starts afresh.
+    private var retries: [String: (tries: Int, at: Date)] = [:]
+    static let maxTries = 3
+    static let retryGap: TimeInterval = 120
+
+    private static func retryable(_ error: Error) -> Bool {
+        switch error as? Sender.Failure {
+        case .notSent, .notPasted, .unconfirmed, .wrongApp, .interrupted, .locked: return true
+        default: return false
+        }
+    }
+
+    private func send(_ n: Nudge, scheduled: Bool = false) {
         sending = n.name
         startShaking()
         Task {
             var failure: String?
             do {
                 let reply = try await Sender.send(n, config: config)
-                record("\(n.name): sent (\(n.target.label))" + (reply.map { ": \($0)" } ?? ""))
+                let tries = (retries[n.id]?.tries ?? 0) + 1
+                retries[n.id] = nil
+                record("\(n.name): sent (\(n.target.label))" + (reply.map { ": \($0)" } ?? "") + (tries > 1 ? " (try \(tries))" : ""))
                 notify("\(n.name) sent", n.target.label + (reply.map { ": \($0)" } ?? ""), failed: false)
             } catch {
                 failure = error.localizedDescription
-                record("\(n.name): not sent: \(error.localizedDescription)")
-                notify("\(n.name) wasn't sent", error.localizedDescription.prefix(1).uppercased() + error.localizedDescription.dropFirst(), failed: true)
+                let tries = (retries[n.id]?.tries ?? 0) + 1
+                if scheduled, Store.retryable(error), tries < Store.maxTries {
+                    let at = Date().addingTimeInterval(Store.retryGap)
+                    retries[n.id] = (tries, at)
+                    record("\(n.name): not sent (try \(tries) of \(Store.maxTries)): \(error.localizedDescription); trying again at \(Store.short(at))")
+                } else {
+                    retries[n.id] = nil
+                    record("\(n.name): not sent\(tries > 1 ? " after \(tries) tries" : ""): \(error.localizedDescription)")
+                    notify("\(n.name) wasn't sent", error.localizedDescription.prefix(1).uppercased() + error.localizedDescription.dropFirst(), failed: true)
+                }
             }
             state.outcomes[n.id] = .init(date: Date(), error: failure)
             saveState()
@@ -281,16 +317,47 @@ final class Store: ObservableObject {
 
     /// Asks Claude Code when Claude's usage runs out, for "When Claude resets" nudges (same rules as
     /// for Codex: at most every 10 minutes, only while there's such a nudge, the resume time kept).
+    /// Reads Claude's usage through Claude Code: every 10 minutes while a "When Claude resets" nudge
+    /// is on, and every 6 hours while a Claude Code nudge is (to spot a signed-out Claude Code early).
     private func refreshClaude(force: Bool = false) {
-        guard !claudeChecking,
-              config.nudges.contains(where: { $0.enabled && $0.mode == .claudeReset && $0.mode.fits($0.target) }) else { return }
-        if !force, let last = claudeCheckedAt, now.timeIntervalSince(last) < 600 { return }
+        let resetNudge = config.nudges.contains(where: { $0.enabled && $0.mode == .claudeReset && $0.mode.fits($0.target) })
+        let codeNudge = config.nudges.contains(where: { $0.enabled && $0.target == .claudeCode })
+        guard !claudeChecking, resetNudge || codeNudge else { return }
+        if !force, let last = claudeCheckedAt, now.timeIntervalSince(last) < (resetNudge ? 600 : 6 * 3600) { return }
         claudeChecking = true
         Task {
-            let answer = await CLITools.claudeOutUntil()
+            let answer = await CLITools.claudeUsage()
             claudeChecking = false
             claudeCheckedAt = Date()
-            guard let outUntil = answer else { return }
+            let problem: String?
+            switch answer {
+            case .signedOut: problem = "Claude Code is signed out"
+            case .unreadable(let why): problem = "Claude's usage couldn't be read (\(why))"
+            case .out: problem = nil
+            }
+            if problem != claudeProblem {
+                claudeProblem = problem
+                if let problem {
+                    record("\(problem); \(resetNudge ? "When Claude resets nudges can't tell when to go" : "Claude Code nudges will fail")")
+                    notify(problem, problem == "Claude Code is signed out"
+                           ? "Sign in from the AI Nudge menu › Sign in to Claude Code…"
+                           : "When Claude resets nudges can't tell when to go.", failed: true)
+                } else {
+                    record("Claude's usage can be read again")
+                }
+            }
+            guard case .out(let outUntil) = answer else { return }
+            // Signed in: see when the sign-in runs out (twice a day), and warn 3 days ahead.
+            if claudeLoginCheckedAt.map({ Date().timeIntervalSince($0) > 12 * 3600 }) ?? true {
+                claudeLoginCheckedAt = Date()
+                claudeLoginEnds = await CLITools.claudeLoginEnds()
+                if claudeLoginEndingSoon, let ends = claudeLoginEnds, claudeLoginWarned != ends {
+                    claudeLoginWarned = ends
+                    record("Claude Code's sign-in runs out \(Store.day(ends)); sign in again from the menu")
+                    notify("Claude Code's sign-in runs out \(Store.day(ends))",
+                           "Sign in again from the AI Nudge menu › Sign in to Claude Code…, or Claude nudges that use it will stop.", failed: true)
+                }
+            }
             claudeOutUntil = outUntil
             if let until = outUntil {
                 let resume = until.addingTimeInterval(60)
@@ -311,6 +378,11 @@ final class Store: ObservableObject {
             return "Claude is out of usage until \(until), so this goes at \(Store.short(at))."
         }
         guard claudeCheckedAt != nil else { return "Checking Claude's usage…" }
+        if let claudeProblem {
+            return claudeProblem == "Claude Code is signed out"
+                ? "Claude Code is signed out, so this can't tell when Claude resets. Sign in from the menu bar icon › Sign in to Claude Code…"
+                : "\(claudeProblem), so this can't tell when Claude resets."
+        }
         return "Claude has usage left. This goes a minute after it next runs out and resets."
     }
 
@@ -429,6 +501,15 @@ final class Store: ObservableObject {
     func lastFailed(_ n: Nudge) -> Bool { state.outcomes[n.id]?.error != nil }
 
     func refreshTrust() { trusted = Sender.trusted }
+
+    /// Opens Terminal on Claude Code's sign-in, and checks again a little later.
+    func signInToClaudeCode() {
+        if !CLITools.openClaudeSignIn() { record("couldn't open Claude Code's sign-in") }
+        claudeLoginCheckedAt = nil
+        for delay in [60.0, 180, 600] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { Store.shared.refreshClaude(force: true) } }
+        }
+    }
 
     /// Posts a notification if the setting covers it: failures, or every nudge.
     func notify(_ title: String, _ body: String, failed: Bool) {
